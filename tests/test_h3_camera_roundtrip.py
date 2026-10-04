@@ -44,6 +44,34 @@ def native_arguments(model_type, prompt, frames, start=None):
 
 
 class CameraNativeRoundtripTests(unittest.TestCase):
+    def test_controlnet_models_are_not_offered_by_camera_planner(self):
+        for model in ("minimax_h3_control", "minimax_h3_control_pruned"):
+            with self.subTest(model=model):
+                plugin = native_plugin(model)
+                self.assertFalse(plugin._supports_camera(model))
+                visible, timing = plugin.update_visibility(model + "|123", 226, "24", None, None)
+                self.assertFalse(visible["visible"])
+                self.assertEqual(timing, "{}")
+
+    def test_controlnet_default_guide_cannot_be_applied_as_a_camera_plan(self):
+        for model in ("minimax_h3_control", "minimax_h3_control_pruned"):
+            with self.subTest(model=model):
+                plugin = native_plugin(model)
+                args = native_arguments(model, "One continuous scene.", 226)
+                args[4 + camera.FORM_INPUTS.index("video_prompt_type")] = "PV"
+                with self.assertRaisesRegex(gr.Error, "FL2VA or Ref2VA"):
+                    plugin.apply_plan(*args)
+
+    def test_standard_and_pruned_h3_video_models_remain_supported(self):
+        for model in ("minimax_h3_fl2va", "minimax_h3_fl2va_pruned",
+                      "minimax_h3_ref2va", "minimax_h3_ref2va_pruned"):
+            with self.subTest(model=model):
+                plugin = native_plugin(model)
+                self.assertTrue(plugin._supports_camera(model))
+                result = plugin._compile(*native_arguments(model, "One continuous scene.", 226))
+                self.assertEqual(result["frame_count"], 226)
+                self.assertIn("Orbit 360 degrees", result["prompt"])
+
     def test_real_model_defaults_survive_native_queue_prompt_processing(self):
         # Run the same template/split/serialize operations used by wgp's queue
         # validation, then reapply that processed prompt as metadata users do.

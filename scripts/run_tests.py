@@ -21,12 +21,14 @@ def main():
         sys.path.insert(0, str(host))
     os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
     patterns = {
-        "all": "test_h3_camera*.py",
-        "plan": "test_h3_camera_plan.py",
-        "integration": "test_h3_camera_plugin.py",
-        "native": "test_h3_camera_roundtrip.py",
+        "all": ("test_h3_camera*.py",),
+        "plan": ("test_h3_camera_plan.py",),
+        "integration": ("test_h3_camera_plugin.py", "test_h3_camera_labels.py"),
+        "native": ("test_h3_camera_roundtrip.py",),
     }
-    suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"), pattern=patterns[args.suite])
+    suite = unittest.TestSuite()
+    for pattern in patterns[args.suite]:
+        suite.addTests(unittest.defaultTestLoader.discover(str(ROOT / "tests"), pattern=pattern))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
 

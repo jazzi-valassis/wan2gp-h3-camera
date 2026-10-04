@@ -29,6 +29,9 @@ def make_plugin():
     plugin.get_model_family = lambda model: "minimax_h3" if model != "wan" else "wan"
     plugin.get_state_model_type = lambda state: state["model_type"]
     plugin.get_computed_fps = lambda force, model, guide, source: (30 if guide else 24) if force in ("", "auto") else float(force)
+    plugin.refresh_prompt_labels = lambda *args: (gr.update(),) * 5
+    plugin.refresh_video_length_label = lambda *args: gr.update()
+    plugin.PROMPT_TOOLS_ATTACH_JS = "() => window.wangpPromptTools?.attach?.(document)"
     return plugin
 
 
@@ -46,6 +49,38 @@ def arguments(**changes):
 class NativeCameraTests(unittest.TestCase):
     def setUp(self):
         self.plugin = make_plugin()
+
+    def build_real_plugin_ui(self):
+        with gr.Blocks() as ui:
+            components = {}
+            with gr.Column():
+                components["prompt"] = gr.Textbox("A single scene")
+            for name in self.plugin.component_requests:
+                if name == "prompt":
+                    continue
+                if name == "state":
+                    component = gr.State({"model_type": "h3"})
+                elif name == "image_end_row":
+                    component = gr.Row()
+                elif name in ("image_start", "image_end", "image_refs"):
+                    component = gr.Gallery()
+                elif name == "image_prompt_type_endcheckbox":
+                    component = gr.Checkbox()
+                elif name == "image_mode":
+                    component = gr.Number(0)
+                elif name in ("video_length", "sliding_window_size"):
+                    component = gr.Slider(22, 481, value=226)
+                elif name in ("video_guide", "video_source"):
+                    component = gr.Video()
+                elif name in ("prompt_info_label", "wizard_prompt_info_label"):
+                    component = gr.HTML()
+                else:
+                    component = gr.Textbox("24" if name == "force_fps" else "")
+                components[name] = component
+            manager = PluginManager()
+            manager.plugins = {"wan2gp-h3-camera": self.plugin}
+            manager.run_component_insertion_and_setup(components)
+        return ui.get_config_file(), components
 
     def test_apply_routes_audio_and_all_prompt_lines_as_one_native_request(self):
         result = self.plugin.apply_plan(*arguments())
@@ -191,6 +226,12 @@ class NativeCameraTests(unittest.TestCase):
         self.assertEqual(len(snippets), 1)
         self.assertIn("wan2gp:h3-camera:v1", snippets[0])
 
+    def test_setup_requests_native_label_refresh_contract(self):
+        self.assertTrue({"refresh_prompt_labels", "refresh_video_length_label", "PROMPT_TOOLS_ATTACH_JS"}
+                        <= set(self.plugin.global_requests))
+        self.assertTrue({"wizard_prompt", "prompt_info_label", "wizard_prompt_info_label"}
+                        <= set(self.plugin.component_requests))
+
     def test_missing_global_produces_visible_compatibility_diagnostic(self):
         del self.plugin.get_model_family
         self.plugin.post_ui_setup({})
@@ -213,38 +254,38 @@ class NativeCameraTests(unittest.TestCase):
         self.assertEqual(self.plugin.preview(*first), first_result)
 
     def test_real_gradio_plugin_insertion_registers_apply_and_native_outputs(self):
-        with gr.Blocks() as ui:
-            components = {}
-            with gr.Column():
-                components["prompt"] = gr.Textbox("A single scene")
-            for name in self.plugin.component_requests:
-                if name == "prompt":
-                    continue
-                if name == "state":
-                    component = gr.State({"model_type": "h3"})
-                elif name == "image_end_row":
-                    component = gr.Row()
-                elif name in ("image_start", "image_end", "image_refs"):
-                    component = gr.Gallery()
-                elif name == "image_prompt_type_endcheckbox":
-                    component = gr.Checkbox()
-                elif name == "image_mode":
-                    component = gr.Number(0)
-                elif name in ("video_length", "sliding_window_size"):
-                    component = gr.Slider(22, 481, value=226)
-                elif name in ("video_guide", "video_source"):
-                    component = gr.Video()
-                else:
-                    component = gr.Textbox("24" if name == "force_fps" else "")
-                components[name] = component
-            manager = PluginManager()
-            manager.plugins = {"wan2gp-h3-camera": self.plugin}
-            manager.run_component_insertion_and_setup(components)
-        config = ui.get_config_file()
+        config, components = self.build_real_plugin_ui()
         apply = next(fn for fn in config["dependencies"] if fn["api_name"] == "h3_camera_apply")
         self.assertEqual(apply["outputs"][:len(camera.FORM_OUTPUTS)], [components[name]._id for name in camera.FORM_OUTPUTS])
         panel = next(item for item in config["components"] if item["props"].get("elem_id") == "h3-camera-panel")
         self.assertTrue(panel["props"]["visible"])
+
+    def test_apply_label_refresh_chain_runs_only_after_success(self):
+        config, components = self.build_real_plugin_ui()
+        dependencies = config["dependencies"]
+        apply = next(item for item in dependencies if item["api_name"] == "h3_camera_apply")
+        prompt_refreshes = [item for item in dependencies if item.get("trigger_after") == apply["id"]]
+        self.assertEqual(len(prompt_refreshes), 1)
+        prompt_refresh = prompt_refreshes[0]
+        self.assertTrue(prompt_refresh["trigger_only_on_success"])
+        self.assertFalse(prompt_refresh["api_name"])
+        self.assertEqual(prompt_refresh["show_progress"], "hidden")
+        self.assertEqual(prompt_refresh["inputs"], [components[name]._id for name in
+                         ("state", "multi_prompts_gen_type", "image_mode")])
+        self.assertEqual(prompt_refresh["outputs"], [components[name]._id for name in
+                         ("prompt", "wizard_prompt", "image_end", "prompt_info_label", "wizard_prompt_info_label")])
+        frame_refreshes = [item for item in dependencies if item.get("trigger_after") == prompt_refresh["id"]]
+        self.assertEqual(len(frame_refreshes), 1)
+        frame_refresh = frame_refreshes[0]
+        self.assertTrue(frame_refresh["trigger_only_on_success"])
+        self.assertFalse(frame_refresh["api_name"])
+        self.assertEqual(frame_refresh["show_progress"], "hidden")
+        self.assertEqual(frame_refresh["inputs"], [components[name]._id for name in
+                         ("state", "video_length", "force_fps", "video_guide", "video_source")])
+        self.assertEqual(frame_refresh["outputs"], [components["video_length"]._id])
+        js_refreshes = [item for item in dependencies if item.get("trigger_after") == frame_refresh["id"]
+                        and item.get("js") == self.plugin.PROMPT_TOOLS_ATTACH_JS]
+        self.assertEqual(len(js_refreshes), 1)
 
 
 if __name__ == "__main__":

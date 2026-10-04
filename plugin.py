@@ -17,7 +17,8 @@ from .editor import BRIDGE_JS, render_editor
 
 MAX_PLAN_BYTES = 64 * 1024
 PLAN_FORMAT = "wangp-h3-camera-v1"
-HOST_GLOBALS = ("get_state_model_type", "get_model_def", "get_model_family", "get_computed_fps")
+HOST_GLOBALS = ("get_state_model_type", "get_model_def", "get_model_family", "get_computed_fps",
+                "refresh_prompt_labels", "refresh_video_length_label")
 FORM_INPUTS = (
     "prompt", "state", "force_fps", "video_length", "video_guide", "video_source",
     "image_mode", "image_prompt_type", "image_start", "multi_prompts_gen_type",
@@ -29,21 +30,23 @@ FORM_OUTPUTS = (
     "sliding_window_discard_last_frames", "sliding_window_trim_first_frames",
     "image_end", "image_prompt_type", "image_prompt_type_endcheckbox", "image_end_row",
 )
+LABEL_OUTPUTS = ("prompt", "wizard_prompt", "image_end", "prompt_info_label", "wizard_prompt_info_label")
 
 
 class H3CameraPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = "H3 Camera"
-        self.version = "0.2.1"
+        self.version = "0.2.2"
         self.type = ["extension"]
         self.description = "Visual single-shot camera paths for MiniMax H3"
 
     def setup_ui(self):
-        for name in dict.fromkeys((*FORM_INPUTS, *FORM_OUTPUTS, "model_choice_target")):
+        for name in dict.fromkeys((*FORM_INPUTS, *FORM_OUTPUTS, *LABEL_OUTPUTS, "model_choice_target")):
             self.request_component(name)
         for name in HOST_GLOBALS:
             self.request_global(name)
+        self.request_global("PROMPT_TOOLS_ATTACH_JS")
         self.add_custom_js(f"({BRIDGE_JS})();")
         self.insert_after("prompt", self.build_panel)
 
@@ -58,6 +61,7 @@ class H3CameraPlugin(WAN2GPPlugin):
         definition = self.get_model_def(model_type) or {}
         return (self.get_model_family(model_type) == "minimax_h3"
                 and not definition.get("audio_only", False)
+                and not definition.get("control_net_weight_size", 0)
                 and all(flag in definition.get("image_prompt_types_allowed", "") for flag in "SE"))
 
     def build_panel(self):
@@ -65,6 +69,8 @@ class H3CameraPlugin(WAN2GPPlugin):
         state = components.get("state")
         missing = [name for name in self.component_requests if name not in components]
         missing_globals = [name for name in HOST_GLOBALS if not callable(getattr(self, name, None))]
+        if not isinstance(getattr(self, "PROMPT_TOOLS_ATTACH_JS", None), str):
+            missing_globals.append("PROMPT_TOOLS_ATTACH_JS")
         model_type = self.get_state_model_type(state.value) if state is not None and not missing_globals else None
         with gr.Accordion("H3 Camera - single-shot planner", open=False,
                           visible=bool(missing or missing_globals) or self._supports_camera(model_type),
@@ -121,7 +127,15 @@ class H3CameraPlugin(WAN2GPPlugin):
             args = [path, motion, interpolation, close_loop, *[components[name] for name in FORM_INPUTS]]
             preview.click(self.preview, inputs=args, outputs=[table, compiled, status], api_name="h3_camera_preview")
             apply.click(self.apply_plan, inputs=args, outputs=[*[components[name] for name in FORM_OUTPUTS],
-                        table, compiled, status], api_name="h3_camera_apply")
+                        table, compiled, status], api_name="h3_camera_apply").success(
+                self.refresh_prompt_labels,
+                inputs=[components[name] for name in ("state", "multi_prompts_gen_type", "image_mode")],
+                outputs=[components[name] for name in LABEL_OUTPUTS], show_progress="hidden", api_name=False,
+            ).success(
+                self.refresh_video_length_label,
+                inputs=[components[name] for name in ("state", "video_length", "force_fps", "video_guide", "video_source")],
+                outputs=components["video_length"], show_progress="hidden", api_name=False,
+            ).then(fn=None, inputs=None, outputs=None, js=self.PROMPT_TOOLS_ATTACH_JS, api_name=False)
             upload.change(self.load_plan, inputs=upload, outputs=[path, motion, interpolation, close_loop])
             save.click(self.save_plan_for_session, inputs=[path, motion, interpolation, close_loop, export_state],
                        outputs=[download, export_state])

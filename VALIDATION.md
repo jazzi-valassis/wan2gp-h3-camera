@@ -1,34 +1,45 @@
 # H3 Camera validation
 
-Release 0.2.1 changes author credits, release documentation, and the version identifier only. Its planner code and browser assets match 0.2.0 apart from that identifier. The behavioral results below belong to 0.2.0 and are retained as the baseline; they are not a claim of a new full application or GPU run.
+Version 0.2.2 was checked on 2026-10-04 against official WanGP 13.141, revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, using Python 3.11.11 and Gradio 5.29.0 on macOS arm64.
 
-Release 0.2.0 was checked on 2026-10-04 against WanGP 13.141, upstream revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, with Python 3.11.11 and Gradio 5.29.0.
+The final regression found two defects in 0.2.1: dedicated H3 ControlNet models passed the support check, and Apply could leave native prompt and duration labels stale. Both are corrected in 0.2.2. The new tests fail on the original implementation and pass with the fixes.
 
 ## Automated checks
 
 ```sh
-python scripts/run_tests.py --suite plan
+python scripts/run_tests.py --host /path/to/Wan2GP --suite all
 python scripts/run_tests.py --host /path/to/Wan2GP --suite integration
+python scripts/run_tests.py --suite plan
 ```
 
-The sixteen compiler tests passed independently with standard Python. Together with the eighteen form and export tests, all **34 CPU checks passed** in the isolated verification environment. Coverage includes strict plan validation, frame alignment, FPS timing, prompt/audio/reference preservation, repeat application, unsupported input rejection, loop endpoint safeguards, saved-plan round trips, supported JavaScript registration, compatibility diagnostics, independent session inputs, and export cleanup. The startup and diagnostic changes first failed their new assertions on the baseline. Export lifecycle assertions also failed before the corresponding implementation existed.
+All **45 tests passed**: 16 compiler tests, 20 form/lifecycle tests, two native-label helper tests, and seven native model/prompt/gallery tests. The focused integration suite also passed independently, with 22 tests. All 45 tests also passed from a freshly extracted installation ZIP.
 
-The verification environment used the unmodified pinned plugin loader, frame scheduler, and prompt parser. Test-supplied model metadata and FPS functions isolate form behavior from model loading. The loader's unused configuration-migration import was replaced by a boundary that raises if called. No migration, model initialization, or GPU code was executed. This is a scoped compatibility check, not a complete WanGP startup.
+Coverage includes strict path validation, H3 frame alignment, FPS timing, scene/audio/reference preservation, repeated Apply, unsupported modes, closed-loop endpoints, reference numbering, saved-plan round trips, independent session inputs, export cleanup, native label refresh, and success-only callback wiring.
 
-The package also retains four additional native-model tests under `test_h3_camera_roundtrip.py`. They require the full WanGP environment and **were not rerun for this release**. Run `--suite native` there; `--suite all` includes them. Historical checks from the previous local plugin are not counted as current results.
+These tests use the actual pinned plugin loader, scheduler, prompt parser, model handler, text-presentation method, and Gradio gallery processing. Form unit tests supply model/FPS metadata to isolate their behavior. Native-label tests execute the selected unmodified host helper functions without starting a second application. No model weights are initialized by the test suite.
 
-Static package checks passed with ten Python files and no errors or warnings. Both browser JavaScript files passed `node --check`.
+Static package checks passed for 11 Python files with no errors or warnings. Both unchanged browser JavaScript files passed `node --check`. The isolated environment's 192 installed packages passed dependency consistency checking. The plugin itself adds no Python dependencies.
 
-## Loader and browser checks
+## Installation and lifecycle
 
-An isolated Gradio test interface loaded a fresh package copy through the real WanGP plugin manager. Discovery found its extension metadata without executing the plugin. Disabled loading registered no plugin or JavaScript. Enabled loading constructed exactly one main-form panel across main and edit setup passes, and Apply remained bound to the main form. The checks reported no loader errors.
+Four fresh-process checks passed using the real plugin manager: enabled, disabled, safe mode, and removed. Metadata discovery did not import the plugin. Enabled loading registered the extension and one browser bridge; the other modes imported neither the plugin nor its JavaScript. The package keeps the required `wan2gp-h3-camera` root and its own local assets.
 
-Eleven checks passed in Chrome against that interface: Preview preserved the scene; Apply preserved the scene and audio; the selected full orbit appeared in the prompt; repeat Apply kept one identical plan; the edit form remained untouched; invalid JSON disabled playback; a valid preset restored the path; controls recovered; Save produced a downloadable plan; repeated Save remained usable; and the browser reported no page errors. These checks exercised real DOM events, the sandboxed editor, Gradio callbacks, and file outputs. The interface used test model metadata rather than loading H3.
+The guideline review covered root layout, extension metadata, relative imports, host requests, main/edit form ownership, session state, input preservation, browser sandbox/message checks, exports, installation, update, disable, removal, and attribution. No host source, model handler, or pipeline patch is shipped.
 
-The release builder includes only the plugin's own sources, assets, documentation, and portable tests. It writes an archive checksum and per-file manifest. Installation uses the existing `wan2gp-h3-camera` folder name. No host core edits or additional dependencies are required.
+## Full application and browser checks
 
-The user's full WanGP application was not restarted for this release. Its saved model settings, enabled-plugin configuration, and generation queue were not modified by these checks. An installed-file update becomes active after a normal restart.
+The normal WanGP application started successfully in a separate test installation with H3 Camera and Motion Designer enabled. All 2,764 upstream source files matched the downloaded official revision. Configuration, settings, output paths, and checkpoint paths were separate from the user's normal application, with no preload policy and no startup queue.
+
+The test configuration initially omitted the host's standard `clear_file_list` setting, causing an unrelated native gallery refresh error. Restoring the upstream default of 5 resolved that test-setup issue without changing host or plugin source.
+
+All **22 browser checks passed** against the corrected 0.2.2 package. They covered PG/W-to-FG prompt and endpoint labels, duration-label refresh, failure atomicity, preservation of unrelated settings and audio, Preview, repeated Apply, saved-plan download/upload, numeric edits, keyframe add/remove, pointer dragging, playback, invalid-JSON recovery, a real-image closed loop, two separate sessions, Motion Designer coexistence, layout, and empty page-error logs. Each session had exactly one H3 Camera panel. The unchanged editor's eight presets also passed against the baseline application.
+
+The isolated browser's native model selectors offered only MiniMax H3 / Ref2VA 33B. Dedicated ControlNet selection was therefore verified through the actual host-backed model tests rather than browser selection. The browser retained the host's pre-existing `Too many arguments provided for the endpoint.` console warnings, also present before the candidate changes; no candidate page error occurred.
+
+The test application uses WanGP's stock Apple/MPS support. Nonfatal MPS autocast and PyAV/OpenCV AVFoundation warnings occurred during startup; no plugin-load failure occurred. Optional Deepy was disabled for these checks.
 
 ## Scope of the result
 
-These checks establish editor and generation-form integration. No camera-guidance video was generated or evaluated, and no same-seed visual comparison was performed. Camera movement remains text guidance; exact trajectories, complete orbits, and improved output quality are not established by these checks.
+This verifies the tested plugin/host combination; it is not a guarantee for every future WanGP version or third-party plugin combination. The repository remains private, so installation from GitHub requires an authenticated clone or an authorized ZIP download.
+
+No camera-guidance video was generated or evaluated. Windows/CUDA rendering, exact camera trajectories, complete orbits, and output-quality improvements are not established by these checks. Camera movement remains prompt guidance. The user's normal WanGP application was not restarted, and its generation queue was not used.

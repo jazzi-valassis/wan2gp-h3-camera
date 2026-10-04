@@ -4,7 +4,7 @@ A visual single-shot camera planner for MiniMax H3 in [WanGP / Wan2GP](https://g
 
 **Author and maintainer:** [Jazzi](https://github.com/jazzi-valassis)
 
-**Version:** 0.2.1 · **License:** [MIT](LICENSE) · **Plugin type:** extension
+**Version:** 0.2.2 · **License:** [MIT](LICENSE) · **Plugin type:** extension
 
 The plugin adds no model downloads, GPU allocations or extra Python dependencies. Camera movement is prompt guidance: the diagram does not impose an exact 3D trajectory on the model.
 
@@ -33,7 +33,7 @@ In WanGP, open **Plugins**, enable **H3 Camera**, and save. Restart WanGP after 
 
 ### Install from a ZIP
 
-Download `wan2gp-h3-camera-0.2.1.zip` from the [0.2.1 release](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases/tag/v0.2.1) while signed in to an account with access. Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. The release also includes a SHA-256 checksum and per-file manifest.
+Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases) while signed in to an account with access, or build `wan2gp-h3-camera-0.2.2.zip` from this checkout with `python scripts/build_release.py`. Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. The prepared package includes a SHA-256 checksum and per-file manifest.
 
 The final layout must be:
 
@@ -67,11 +67,11 @@ The repository root contains the plugin files directly. While it is private, use
 
 ## Compatibility
 
-Release **0.2.1** targets **WanGP 13.141**, upstream revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, with **Gradio 5.29.0**. Older releases are not certified by this package. Future host changes require repeating the compatibility checks.
+Release **0.2.2** targets **WanGP 13.141**, upstream revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, with **Gradio 5.29.0**. Older releases are not certified by this package. Future host changes require repeating the compatibility checks.
 
 The plugin uses `WAN2GPPlugin`, component/global requests, `insert_after`, and `add_custom_js`. Its remaining host imports are the installed `shared.utils.frame_scheduler.normalize_frame_count` and `shared.utils.prompt_parser.split_prompt_units`. These are WanGP dependencies, not additional files to ship. It does not patch the pipeline, launch another server, submit its own generation jobs, or import `h3cam_ref` or MiniMaxH3Mod.
 
-Missing required form controls or injected host functions produce a compatibility message when WanGP can render the insertion point. The static version field is not a promise that every older or future host layout works.
+Missing required form controls or injected host functions produce a compatibility message when WanGP can render the insertion point. The plugin also requests WanGP's native prompt/duration label helpers and prompt-tool attachment script to keep labels synchronized after Apply. The static version field is not a promise that every older or future host layout works.
 
 ## Use
 
@@ -96,7 +96,7 @@ Use **Camera path JSON and saved plans** to save or load portable `.json` plans.
 
 - Camera coordinates become text instructions; this is approximate prompt guidance, not an enforced 3D camera track.
 - The first pose is fixed at time 0, azimuth/elevation 0, distance 1. The last time is 1. Use 2–24 keyframes.
-- The planner supports one shot/window, up to 481 frames. Multi-shot prompts, scheduler slash commands, video continuation, Control Video editing, still-image mode and audio-only models are rejected before applying.
+- The planner supports one shot/window, up to 481 frames. Dedicated H3 ControlNet models, multi-shot prompts, scheduler slash commands, video continuation, Control Video editing, still-image mode and audio-only models are rejected before applying.
 - Audio sections and reference tokens in the scene prompt are retained. Frozen mode deliberately overrides subject/environment movement; audio stays governed by the scene prompt.
 - The viewport uses local embedded assets and a sandboxed iframe, with no CDN or external service.
 
@@ -120,7 +120,7 @@ On Windows, select the environment you normally use for WanGP, for example:
 D:\Wan2GP\env_venv\Scripts\python.exe scripts\run_tests.py --host D:\Wan2GP
 ```
 
-The tests load **this package**, even when another H3 Camera copy is already installed. `--suite integration` selects form and loader tests. `--suite native` selects the additional model-handler, text-encoder and gallery tests; those require the complete WanGP Python dependencies. No test starts a generation. See [VALIDATION.md](VALIDATION.md) for the checks actually performed for this release and their limits.
+The tests load **this package**, even when another H3 Camera copy is already installed. `--suite integration` selects form, loader, and native-label tests. `--suite native` selects the model-handler, text-encoder and gallery tests; those require the complete WanGP Python dependencies. No test starts a generation. See [VALIDATION.md](VALIDATION.md) for the checks actually performed for this release and their limits.
 
 Build a release with standard Python:
 
