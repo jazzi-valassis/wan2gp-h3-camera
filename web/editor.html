@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>H3 camera path editor</title>
+  <style>/* CAMERA_EDITOR_CSS */</style>
+</head>
+<body>
+<main id="editor">
+  <div class="toolbar">
+    <div class="presets">
+      <label for="preset">Camera move</label>
+      <select id="preset">
+        <option value="custom">Custom path</option>
+        <option value="static">Static</option>
+        <option value="right90">Orbit right 90°</option>
+        <option value="left90">Orbit left 90°</option>
+        <option value="half">Half orbit</option>
+        <option value="full">Full orbit</option>
+        <option value="push">Push in</option>
+        <option value="pull">Pull back</option>
+        <option value="rise">Rise</option>
+      </select>
+    </div>
+    <span id="duration" class="muted">Timing follows the generation form</span>
+  </div>
+  <p id="error" class="error" role="alert" hidden></p>
+  <div class="workbench">
+    <section class="viewport" aria-label="Camera position preview">
+      <svg id="orbit" viewBox="0 0 460 280" role="group" tabindex="0"
+           aria-label="Camera path. Drag to orbit, wheel to change distance. Arrow keys rotate; Shift makes larger steps."
+           aria-describedby="canvas-help">
+        <g id="scene"></g>
+      </svg>
+      <div class="view-caption"><span><i class="dot origin"></i>Start view</span><span><i class="dot camera"></i>Camera</span><span class="muted">Schematic preview</span></div>
+      <p id="canvas-help" class="hint">Drag sideways to rotate, vertically to raise. Release to switch axes. Click here, then scroll to change distance.</p>
+    </section>
+    <section class="controls" aria-label="Selected keyframe">
+      <div class="keyframe-heading"><strong id="selected-title">Keyframe 2</strong><span id="selected-time" class="muted">End</span></div>
+      <label class="control" for="time">Time <span class="unit">% of clip</span>
+        <input id="time" type="number" min="0" max="100" step="0.1" value="100">
+      </label>
+      <label class="control" for="azimuth">Rotation <span class="unit">degrees</span>
+        <input id="azimuth" type="number" min="-11520" max="11520" step="1" value="90">
+      </label>
+      <label class="control" for="elevation">Elevation <span class="unit">degrees</span>
+        <input id="elevation" type="number" min="-89" max="89" step="1" value="0">
+      </label>
+      <label class="control" for="distance">Distance <span class="unit">× start distance</span>
+        <input id="distance" type="number" min="0.1" max="4" step="0.05" value="1">
+      </label>
+      <input id="distance-range" type="range" min="0.1" max="4" step="0.05" value="1" aria-label="Camera distance">
+      <p id="keyframe-help" class="hint">Positive rotation moves the camera right. 360° makes one full turn.</p>
+    </section>
+  </div>
+  <section class="timeline" aria-label="Camera keyframe timeline">
+    <div class="timeline-toolbar">
+      <div class="actions"><button id="play" type="button" aria-pressed="false">Play preview</button><button id="add" type="button">Add keyframe</button><button id="remove" type="button">Remove</button></div>
+      <span id="frame-count" class="muted">2 / 24 keyframes</span>
+    </div>
+    <div id="keyframes" class="keyframes" aria-label="Select a keyframe"></div>
+    <label class="scrub-label" for="scrub"><span>Preview position</span><output id="scrub-time">0%</output></label>
+    <input id="scrub" type="range" min="0" max="1000" step="1" value="0" aria-label="Preview position">
+  </section>
+  <p class="footnote">The start view stays fixed. This plans prompt instructions; H3 may approximate the path.</p>
+  <p id="connection" class="hint" role="status">Connecting to the generation form…</p>
+</main>
+<script>/* CAMERA_EDITOR_JS */</script>
+</body>
+</html>
