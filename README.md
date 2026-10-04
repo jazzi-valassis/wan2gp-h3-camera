@@ -19,21 +19,33 @@ The plugin adds no model downloads, GPU allocations or extra Python dependencies
 
 This is a standalone **extension** plugin. Its Python modules, browser assets and tests are all inside this directory. No files need to be copied into WanGP's `shared/`, `models/`, or `defaults/` directories.
 
-### Clone the private repository
+### Install through WanGP
 
-This repository is currently private. Use a GitHub account with access and an authenticated GitHub CLI on the machine where WanGP is installed. From the **WanGP root directory**, run:
+In WanGP, open **Plugins**. Under **Install New Plugin**, paste:
+
+```text
+https://github.com/jazzi-valassis/wan2gp-h3-camera
+```
+
+Click **Download and Install Plugin**, enable **H3 Camera**, and click **Save Settings**. Restart WanGP after existing work finishes. For supported H3 video models, **H3 Camera - single-shot planner** appears below the main prompt in **Media Generator**.
+
+The repository is public; no GitHub account is required to install or download it. Keep only one installed copy. For an existing installation, use the [update instructions](#update-an-existing-installation).
+
+### Clone with Git
+
+From the **WanGP root directory**, run:
 
 ```sh
-gh repo clone jazzi-valassis/wan2gp-h3-camera plugins/wan2gp-h3-camera
+git clone https://github.com/jazzi-valassis/wan2gp-h3-camera.git plugins/wan2gp-h3-camera
 ```
 
 An existing `plugins/wan2gp-h3-camera` directory must be backed up outside `plugins/` before cloning into that location. Do not keep a second enabled copy under another name.
 
-In WanGP, open **Plugins**, enable **H3 Camera**, and save. Restart WanGP after existing work finishes. For supported H3 video models, **H3 Camera - single-shot planner** appears below the main prompt in **Media Generator**.
+Enable **H3 Camera**, save settings, and restart WanGP as above.
 
 ### Install from a ZIP
 
-Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases) while signed in to an account with access, or build `wan2gp-h3-camera-0.2.2.zip` from this checkout with `python scripts/build_release.py`. Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. The prepared package includes a SHA-256 checksum and per-file manifest.
+Download `wan2gp-h3-camera-0.2.2.zip` from the [0.2.2 release](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases/tag/v0.2.2). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. The release includes a SHA-256 checksum and per-file manifest. You can also build the ZIP from this checkout with `python scripts/build_release.py`.
 
 The final layout must be:
 
@@ -55,7 +67,7 @@ GitHub's **Code > Download ZIP** source archive uses a branch suffix such as `wa
 
 For an existing installation, keep the folder name `wan2gp-h3-camera`. Back up the old folder outside `plugins/` or name the backup with a `.bak` suffix. Replace it with the new package. Keep your existing enabled-plugin setting and restart when convenient. Installing a second copy under another name creates conflicting editor IDs.
 
-For a Git clone, fetch updates from the WanGP root with:
+For a Git installation, use the update action in WanGP's **Plugins** tab, or fetch updates from the WanGP root with:
 
 ```sh
 git -C plugins/wan2gp-h3-camera pull --ff-only
@@ -63,7 +75,7 @@ git -C plugins/wan2gp-h3-camera pull --ff-only
 
 Review and preserve local edits before updating. Restart WanGP to load changed Python and browser assets. A ZIP installation has no Git remote; update it by replacing the plugin folder.
 
-The repository root contains the plugin files directly. While it is private, use the authenticated clone or ZIP methods above; a browser login alone does not authenticate WanGP's GitHub-URL installer or its update checks.
+The repository root contains the plugin files directly, so the public URL can be used with WanGP's GitHub installer.
 
 ## Compatibility
 
@@ -134,7 +146,7 @@ This produces the installable ZIP, its SHA-256 checksum, and a per-file hash man
 
 | Symptom | Check |
 | --- | --- |
-| Repository is not found or cloning fails | Confirm that GitHub CLI is signed in to an account with access to this private repository. |
+| Download or clone fails | Check the repository URL and your connection to GitHub. Git must be installed for Plugin Manager and command-line installation; the release ZIP is an alternative. |
 | Plugin is missing from Plugins | Confirm the folder layout above; `plugin.py` must sit directly inside `plugins/wan2gp-h3-camera/`. |
 | Plugin is enabled but the planner is hidden | Restart WanGP, select a supported H3 video model, and open Media Generator. This extension does not add a separate top-level tab. |
 | A compatibility message lists missing controls or functions | Compare your host with the tested [WanGP revision](#compatibility). Do not copy host core files into the plugin. |

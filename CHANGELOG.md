@@ -5,6 +5,7 @@
 - Exclude dedicated H3 ControlNet models from the single-shot planner while retaining FL2VA, Ref2VA, and their supported variants.
 - Refresh native prompt, endpoint, and duration labels after a successful Apply using WanGP's existing helpers.
 - Add regressions for model support and native label synchronization.
+- Document public installation through WanGP's Plugin Manager, Git, and the release ZIP.
 
 ## 0.2.1 - 2026-10-04
 

@@ -40,6 +40,6 @@ The test application uses WanGP's stock Apple/MPS support. Nonfatal MPS autocast
 
 ## Scope of the result
 
-This verifies the tested plugin/host combination; it is not a guarantee for every future WanGP version or third-party plugin combination. The repository remains private, so installation from GitHub requires an authenticated clone or an authorized ZIP download.
+This verifies the tested plugin/host combination; it is not a guarantee for every future WanGP version or third-party plugin combination. The public repository supports installation through WanGP's Plugin Manager, an HTTPS Git clone, or the prepared release ZIP. See [README.md](README.md) for installation and updates.
 
 No camera-guidance video was generated or evaluated. Windows/CUDA rendering, exact camera trajectories, complete orbits, and output-quality improvements are not established by these checks. Camera movement remains prompt guidance. The user's normal WanGP application was not restarted, and its generation queue was not used.
