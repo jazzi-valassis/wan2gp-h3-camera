@@ -4,7 +4,7 @@ A visual single-shot camera planner for MiniMax H3 in [WanGP / Wan2GP](https://g
 
 **Author and maintainer:** [Jazzi](https://github.com/jazzi-valassis)
 
-**Version:** 0.2.2 · **License:** [MIT](LICENSE) · **Plugin type:** extension
+**Version:** 0.2.3 · **License:** [MIT](LICENSE) · **Plugin type:** extension
 
 The plugin adds no model downloads, GPU allocations or extra Python dependencies. Camera movement is prompt guidance: the diagram does not impose an exact 3D trajectory on the model.
 
@@ -14,6 +14,7 @@ The plugin adds no model downloads, GPU allocations or extra Python dependencies
 - Native frame-count and FPS timing, smooth or linear motion, and optional frozen-scene instructions.
 - Preview without changing the generation form; Apply replaces the previous camera plan while retaining scene, audio and reference instructions.
 - Portable JSON plans and optional closed-loop conditioning using the existing Start Image.
+- Elevation instructions describe physical camera movement, lens tilt, and the requested endpoint view.
 
 ## Install
 
@@ -45,7 +46,7 @@ Enable **H3 Camera**, save settings, and restart WanGP as above.
 
 ### Install from a ZIP
 
-Download `wan2gp-h3-camera-0.2.2.zip` from the [0.2.2 release](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases/tag/v0.2.2). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. The release includes a SHA-256 checksum and per-file manifest. You can also build the ZIP from this checkout with `python scripts/build_release.py`.
+Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.2.3.zip`, run `python scripts/build_release.py`.
 
 The final layout must be:
 
@@ -79,7 +80,7 @@ The repository root contains the plugin files directly, so the public URL can be
 
 ## Compatibility
 
-Release **0.2.2** targets **WanGP 13.141**, upstream revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, with **Gradio 5.29.0**. Older releases are not certified by this package. Future host changes require repeating the compatibility checks.
+Version **0.2.3** targets **WanGP 13.141**, upstream revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, with **Gradio 5.29.0**. Older releases are not certified by this package. Future host changes require repeating the compatibility checks.
 
 The plugin uses `WAN2GPPlugin`, component/global requests, `insert_after`, and `add_custom_js`. Its remaining host imports are the installed `shared.utils.frame_scheduler.normalize_frame_count` and `shared.utils.prompt_parser.split_prompt_units`. These are WanGP dependencies, not additional files to ship. It does not patch the pipeline, launch another server, submit its own generation jobs, or import `h3cam_ref` or MiniMaxH3Mod.
 
@@ -103,6 +104,16 @@ For a **closed loop**, choose a path ending at its original camera pose (for exa
 If reference images are active, adding an End Image changes their H3 picture numbers. The plugin stops this operation with an explanation: first enable and fill the native End Image, then update the scene's picture labels (Start Image is Picture 1, End Image is Picture 2, other images follow). An already active, populated End Image keeps its existing position when replaced.
 
 Use **Camera path JSON and saved plans** to save or load portable `.json` plans. Saved plans include keyframes, scene-motion choice, interpolation and loop choice. They do not overwrite the main scene prompt or duration. Bare keyframe arrays from the original editor are supported when they satisfy the normalized schema. The ordinary WanGP queue stores the compiled prompt and generation settings, so queued jobs do not need the planner to run.
+
+### Elevation moves
+
+When elevation changes, the compiled segment separates movement of the camera from rotation of its lens and describes the endpoint view. High endpoints at 75 degrees or above receive near-overhead wording. Small distance changes of up to 5% within an elevation segment are described as slight percentage adjustments, retaining both distances. Larger distance changes remain explicit dolly instructions. These thresholds select wording; they are not model controls. Paths without elevation changes retain their existing camera wording.
+
+The diagram uses spherical distance and elevation around the subject. A large distance change can make camera height fall even while its elevation angle increases. The compiler accounts for this when describing camera travel. It keeps all keyframe values and does not rewrite the scene's subject actions, dialogue, gaze, or audio.
+
+Use **Write/Enhance before Apply**. Disable automatic prompt enhancement when testing the compiled path, since enhancement can rewrite the instructions or reuse a stored original caption that has no camera plan. Apply again after using Write/Enhance. H3 Camera does not change the host's enhancer setting.
+
+After updating, load your saved plan and press **Apply** again to obtain the new wording. Existing compiled prompts and queued jobs keep their old text. Improved wording still does not enforce exact camera angles, distances, timing, or subject behavior; review the generated video. See [VALIDATION.md](VALIDATION.md) for the actual render comparisons and their limits.
 
 ## Limits
 

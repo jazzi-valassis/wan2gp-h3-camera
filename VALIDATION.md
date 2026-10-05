@@ -1,8 +1,8 @@
 # H3 Camera validation
 
-Version 0.2.2 was checked on 2026-10-04 against official WanGP 13.141, revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, using Python 3.11.11 and Gradio 5.29.0 on macOS arm64.
+Version 0.2.3 was checked on 2026-10-05 against official WanGP 13.141, revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, using Python 3.11.11 and Gradio 5.29.0. Compiler and interface checks ran on macOS arm64; the rendered comparisons used the connected Windows WanGP installation. This record distinguishes prompt correctness from observed model behavior.
 
-The final regression found two defects in 0.2.1: dedicated H3 ControlNet models passed the support check, and Apply could leave native prompt and duration labels stale. Both are corrected in 0.2.2. The new tests fail on the original implementation and pass with the fixes.
+The elevation report showed that a numerical camera plan could become a frontal approach instead of a climb. Version 0.2.3 describes physical camera movement, separate lens tilt, endpoint framing, and proportional distance adjustments. It preserves the keyframes and scene text. The 75-degree and 5% thresholds select prose; they are not model controls.
 
 ## Automated checks
 
@@ -12,34 +12,46 @@ python scripts/run_tests.py --host /path/to/Wan2GP --suite integration
 python scripts/run_tests.py --suite plan
 ```
 
-All **45 tests passed**: 16 compiler tests, 20 form/lifecycle tests, two native-label helper tests, and seven native model/prompt/gallery tests. The focused integration suite also passed independently, with 22 tests. All 45 tests also passed from a freshly extracted installation ZIP.
+All **54 tests passed**: 25 compiler tests, 20 form/lifecycle tests, two native-label helper tests, and seven native model/prompt/gallery tests. The 25 compiler tests also passed independently using standard Python. The nine new elevation tests pass on the candidate; the final negative control against 0.2.2 produces five intended failures and four passing preservation checks, with no errors.
 
-Coverage includes strict path validation, H3 frame alignment, FPS timing, scene/audio/reference preservation, repeated Apply, unsupported modes, closed-loop endpoints, reference numbering, saved-plan round trips, independent session inputs, export cleanup, native label refresh, and success-only callback wiring.
+New coverage checks physical travel versus lens rotation, the reported 81-degree endpoint, small and larger distance adjustments, spherical height when radius changes reverse angular travel, downward views, unchanged path values and times, scene/audio/reference preservation, legacy processed prompts, and comment-stripped new-prompt replacement. Non-elevation orbit, push, pull and hold prompts match the 0.2.2 baseline byte-for-byte.
 
 These tests use the actual pinned plugin loader, scheduler, prompt parser, model handler, text-presentation method, and Gradio gallery processing. Form unit tests supply model/FPS metadata to isolate their behavior. Native-label tests execute the selected unmodified host helper functions without starting a second application. No model weights are initialized by the test suite.
 
-Static package checks passed for 11 Python files with no errors or warnings. Both unchanged browser JavaScript files passed `node --check`. The isolated environment's 192 installed packages passed dependency consistency checking. The plugin itself adds no Python dependencies.
+The package checker passes for all 12 Python files, with no errors or warnings. The native form integration is unchanged apart from the version string. Browser assets, dependency requirements, and the saved-plan schema are unchanged. The plugin adds no Python dependencies or host patches.
 
-## Installation and lifecycle
+## Current browser checks
 
-Four fresh-process checks passed using the real plugin manager: enabled, disabled, safe mode, and removed. Metadata discovery did not import the plugin. Enabled loading registered the extension and one browser bridge; the other modes imported neither the plugin nor its JavaScript. The package keeps the required `wan2gp-h3-camera` root and its own local assets.
+All **six focused browser checks passed** in a separate WanGP 13.141 installation. The actual Preview and Apply controls used the reported three-keyframe path at 124 frames and 24 fps. The checks verified the new elevation wording, exact rows and coordinates, scene/gaze/audio text preservation, repeated Apply, comment-free plan replacement, save/load, and failure atomicity. The invalid-input error was confirmed in the backend log; a toast was not captured.
 
-The guideline review covered root layout, extension metadata, relative imports, host requests, main/edit form ownership, session state, input preservation, browser sandbox/message checks, exports, installation, update, disable, removal, and attribution. No host source, model handler, or pipeline patch is shipped.
+The test app had exactly one H3 Camera panel and no browser page errors. Its checkpoint and output directories remained empty. The browser and owned test app were closed afterward. Camera compiler and plugin code hashes matched the candidate used for the rendering comparisons.
 
-## Full application and browser checks
+## Rendered camera comparisons
 
-The normal WanGP application started successfully in a separate test installation with H3 Camera and Motion Designer enabled. All 2,764 upstream source files matched the downloaded official revision. Configuration, settings, output paths, and checkpoint paths were separate from the user's normal application, with no preload policy and no startup queue.
+The supplied cat-on-stool comparison used Original Ref2VA 33B, seed 764485034, eight steps, and enhancement disabled. The original numeric camera wording stayed largely frontal. A manually rewritten second segment reached a steep downward view but lost eye contact. That pair motivated this compiler change; it did not establish which phrase caused the improvement.
 
-The test configuration initially omitted the host's standard `clear_file_list` setting, causing an unrelated native gallery refresh error. Restoring the upstream default of 5 resolved that test-setup issue without changing host or plugin source.
+The current pilot rendered the exact output of the modified compiler using the same settings and scene text. It reaches a clear top-down endpoint. The cat's gaze and posture still depart from the scene request. No cat- or stool-specific wording is hardcoded into the compiler.
 
-All **22 browser checks passed** against the corrected 0.2.2 package. They covered PG/W-to-FG prompt and endpoint labels, duration-label refresh, failure atomicity, preservation of unrelated settings and audio, Preview, repeated Apply, saved-plan download/upload, numeric edits, keyframe add/remove, pointer dragging, playback, invalid-JSON recovery, a real-image closed loop, two separate sessions, Motion Designer coexistence, layout, and empty page-error logs. Each session had exactly one H3 Camera panel. The unchanged editor's eight presets also passed against the baseline application.
+The subsequent matched comparisons also recover the top-down endpoint:
 
-The isolated browser's native model selectors offered only MiniMax H3 / Ref2VA 33B. Dedicated ControlNet selection was therefore verified through the actual host-backed model tests rather than browser selection. The browser retained the host's pre-existing `Too many arguments provided for the endpoint.` console warnings, also present before the candidate changes; no candidate page error occurred.
+| Model selection | Seed | 0.2.2 wording | 0.2.3 compiler output |
+| --- | --- | --- | --- |
+| Original Ref2VA 33B | 764485034 | Earlier verified A clip stays mostly frontal | Clear top-down endpoint |
+| Original Ref2VA 33B | 708144286 | Fresh baseline stays frontal and grows closer | Clear top-down endpoint |
+| Pruned Ref2VA 20B | 764485034 | Fresh baseline stays mostly frontal | Clear top-down endpoint |
 
-The test application uses WanGP's stock Apple/MPS support. Nonfatal MPS autocast and PyAV/OpenCV AVFoundation warnings occurred during startup; no plugin-load failure occurred. Optional Deepy was disabled for these checks.
+Five new videos completed with no renderer errors: one compiler-output pilot and two fresh old/new pairs. All three compiler-output clips reach the top-down endpoint in these observations. The manually rewritten B clip is supporting background, not one of those three compiler-output results. This is a small check of two related model variants and two seeds, not a reliability estimate for all users.
+
+Every new clip uses eight steps, 704 x 1280, 124 frames at 24 fps, one guidance phase, Euler, flow shift 12, and `int8,int8_convrot`. There are no reference media, separate LoRAs, selected step-skipping cache, or prompt enhancement. Within each fresh pair, only the prompt and output filename differ. All five videos decode correctly, and saved metadata matches the requested settings and camera instructions. The new prompts lose only their two plugin-owned comment markers in metadata. Model metadata identifies the original and pruned-rank8 INT8 ConvRot checkpoints respectively. The two variants' compiler-output videos have different decoded-frame hashes.
+
+Visual inspection used frames 0, 31, 62, 93 and 123. The last frame is at 5.125 seconds; each clip lasts 5.166667 seconds. No path coordinates were adjusted between the old and new wording. The comparison uses coordinates reconstructed from the supplied prompt's printed values, not an original full-precision editor export.
+
+## Earlier interface baseline
+
+The 0.2.2 release passed 22 full-application browser checks, eight editor presets, and four fresh-process lifecycle modes: enabled, disabled, safe mode, and removed. Those results remain historical coverage of the unchanged integration and browser assets; they are not additional 0.2.3 reruns. The earlier guideline audit covered package layout, metadata, host requests, form ownership, session isolation, input preservation, browser sandboxing, exports, installation/update/removal, and attribution. Its separate test installation had all 2,764 upstream source files unchanged.
 
 ## Scope of the result
 
-This verifies the tested plugin/host combination; it is not a guarantee for every future WanGP version or third-party plugin combination. The public repository supports installation through WanGP's Plugin Manager, an HTTPS Git clone, or the prepared release ZIP. See [README.md](README.md) for installation and updates.
+These checks verify the tested plugin and host combination. They do not guarantee every future host version, plugin combination, checkpoint, seed, or camera move. The DaSiWa Hybrid V3 checkpoint from the supplied export is not available on the connected renderer and is not certified by these comparisons.
 
-No camera-guidance video was generated or evaluated. Windows/CUDA rendering, exact camera trajectories, complete orbits, and output-quality improvements are not established by these checks. Camera movement remains prompt guidance. The user's normal WanGP application was not restarted, and its generation queue was not used.
+Visual review checks changes in viewpoint and the top-down endpoint. It does not measure an exact 81-degree angle, orbit distance, fixed focal length, or timing accuracy. Subject gaze, pose, and framing can still vary. The enhancer-history interaction is documented in README; no global enhancer setting is changed. The normal application is not restarted by this update. Reloading the plugin and applying a saved plan again is necessary to use the new wording; existing queued prompts retain their previous text.

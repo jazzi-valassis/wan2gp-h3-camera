@@ -191,23 +191,64 @@ def _block(kind, lines):
     return f"# WanGP H3 camera {kind} begin\n" + "\n".join(lines) + f"\n# WanGP H3 camera {kind} end"
 
 
+def _elevation_segment(left, right):
+    da = right["azimuth"] - left["azimuth"]
+    de = right["elevation"] - left["elevation"]
+    dd = right["distance"] - left["distance"]
+    start_height = left["distance"] * math.sin(math.radians(left["elevation"]))
+    end_height = right["distance"] * math.sin(math.radians(right["elevation"]))
+    if math.isclose(start_height, end_height, rel_tol=0, abs_tol=1e-9):
+        movement = "moves along the arc to a position at the same height"
+    elif end_height > start_height:
+        movement = "cranes upward through a rising arc"
+    else:
+        movement = "descends through a falling arc"
+    text = f"The camera {movement} around the main subject"
+    if da:
+        text += (f", continuing {abs(da):g} degrees toward camera {'right' if da > 0 else 'left'} "
+                 f"(azimuth {left['azimuth']:g} to {right['azimuth']:g} degrees)")
+    else:
+        text += f", keeping azimuth at {right['azimuth']:g} degrees"
+    text += (f". Its viewing elevation changes from {left['elevation']:g} to {right['elevation']:g} degrees "
+             f"while the lens tilts {'downward' if de > 0 else 'upward'} to keep the subject framed.")
+    if right["elevation"] >= 75:
+        text += (" At the end of this segment, the camera is almost directly above the subject, "
+                 "looking steeply down in a near-overhead view. Top surfaces are visible and vertical features are foreshortened.")
+    elif right["elevation"] > 0:
+        text += " At the end of this segment, the view is elevated above the subject, looking down toward it."
+    elif right["elevation"] < 0:
+        text += " At the end of this segment, the view is below the subject, looking up toward it."
+    else:
+        text += " At the end of this segment, the view returns to the starting elevation."
+    if dd:
+        percent = abs(dd) / left["distance"] * 100
+        if percent <= 5 or math.isclose(percent, 5, rel_tol=0, abs_tol=1e-9):
+            text += (f" Camera-to-subject distance {'increases' if dd > 0 else 'decreases'} only slightly, "
+                     f"from {left['distance']:g}x to {right['distance']:g}x the starting distance (about {percent:.2g}%).")
+        else:
+            text += (f" Dolly {'back' if dd > 0 else 'in'} from {left['distance']:g}x to "
+                     f"{right['distance']:g}x the starting distance (about {percent:.3g}%).")
+    else:
+        text += f" Maintain distance {right['distance']:g}x the starting distance."
+    return text + " Keep the focal length fixed throughout this move."
+
+
 def _segment(left, right):
     da = right["azimuth"] - left["azimuth"]
     de = right["elevation"] - left["elevation"]
     dd = right["distance"] - left["distance"]
+    if de:
+        return _elevation_segment(left, right)
     changes = []
     if da:
         changes.append(f"orbit {abs(da):g} degrees toward camera {'right' if da > 0 else 'left'} "
                        f"(azimuth {left['azimuth']:g} to {right['azimuth']:g} degrees)")
-    if de:
-        changes.append(f"{'raise' if de > 0 else 'lower'} camera elevation from {left['elevation']:g} to {right['elevation']:g} degrees")
     if dd:
         changes.append(f"{'dolly back' if dd > 0 else 'dolly in'} from {left['distance']:g}x to {right['distance']:g}x the starting distance")
     if not changes:
         return "Hold the camera at this pose."
     unchanged = []
-    if not de:
-        unchanged.append(f"elevation {right['elevation']:g} degrees")
+    unchanged.append(f"elevation {right['elevation']:g} degrees")
     if not dd:
         unchanged.append(f"distance {right['distance']:g}x")
     text = "; simultaneously ".join(changes)

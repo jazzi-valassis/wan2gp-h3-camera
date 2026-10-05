@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3 - 2026-10-05
+
+- Describe elevation changes as physical camera movement, separate lens tilt, and an explicit endpoint view, including near-overhead framing for high endpoints.
+- Describe small distance adjustments during elevation moves proportionally, preserving their values without an emphatic dolly instruction.
+- Keep non-elevation camera wording, scene and audio text, keyframe values, native form integration, and legacy plan replacement intact.
+- Add compiler regressions for elevation semantics, spherical height, distance thresholds, preservation, and repeat application. Document the correct order of enhancement and Apply.
+
 ## 0.2.2 - 2026-10-04
 
 - Exclude dedicated H3 ControlNet models from the single-shot planner while retaining FL2VA, Ref2VA, and their supported variants.

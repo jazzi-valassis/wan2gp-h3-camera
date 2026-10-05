@@ -37,7 +37,7 @@ class H3CameraPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = "H3 Camera"
-        self.version = "0.2.2"
+        self.version = "0.2.3"
         self.type = ["extension"]
         self.description = "Visual single-shot camera paths for MiniMax H3"
 
