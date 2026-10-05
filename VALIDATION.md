@@ -1,5 +1,32 @@
 # H3 Camera validation
 
+## 0.2.4 orbit-direction fix
+
+Reported path: orbit 90 degrees, then crane to a near-overhead view. Keyframe 3 kept its absolute orbit angle of 90 degrees. The editor's **Rotation** label was read as a per-segment amount. Setting it to 0 sent the camera back to the start side, and the prompt called that move "continuing 90 degrees toward camera left".
+
+Checked on 2026-10-05 on Windows against WanGP 13.141 (revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`) with Gradio 5.29.0:
+
+- **63 automated tests passed** with `scripts/run_tests.py --suite all`, including nine orbit-direction compiler tests. The 34 plan-suite tests also pass under standalone Python 3.13.
+- A differential check compiled 20,000 random 2- to 5-keyframe paths with both 0.2.3 and 0.2.4. Output changed only for segments that stop, reverse, keep the orbit angle during an elevation change, or orbit into a held angle. The render-validated three-keyframe path below is byte-identical.
+- Headless Chrome drove the editor in the live WanGP page through the reported workflow: add a middle keyframe, set it to 90 degrees, then raise the last keyframe. The last keyframe showed turn 0 with "the orbit stops", and a value of 0 showed a reversal. Editing a turn shifted later keyframes, and an out-of-range turn was rejected with no published change. Preview and Apply wrote the stop wording into the native prompt. No page errors came from the plugin.
+
+### Rendered orbit-then-crane comparison
+
+Each render applied the reported path (orbit 90 degrees by 4.6875 s, then crane to 89 degrees by 9.375 s) through the live Apply button. It used Multishot Ref2VA Singularity v1.3 Pruned, 608 x 832, 226 frames at 24 fps, 12 steps, and no reference media. The scene was a hiker standing on a salt flat. Within a seed, only the camera-plan lines differ:
+
+- **A:** the first 0.2.4 stop sentence, "stops orbiting sideways and cranes upward through a rising arc around the main subject".
+- **B:** A's second segment replaced with the current no-circling sentence.
+- **C:** B plus the current rest point at the end of the first orbit. C is the shipped wording.
+
+| Seed | A | B | C |
+| --- | --- | --- | --- |
+| 764485034 | Side view by 3.5 s, then a full back view by 6 s before rising | Side view held until about 5.3 s; ends about three-quarters behind | Side view reached near 4.7 s and held until about 5.9 s; ends about three-quarters behind |
+| 708144286 | Orbit continues to about 180 degrees by 5.3 s, then that angle holds while rising | Same as A | Same as A |
+
+Every clip rose to a near-overhead endpoint. The stronger wording reduced drift during the crane for one seed. No wording prevented the second seed from overshooting the first 90-degree orbit. Orientation was judged visually from subject-centred crops at fixed times. With a plain background, camera orbit and subject turning cannot be fully separated. This is two seeds and one scene, not a reliability estimate.
+
+## 0.2.3 record
+
 Version 0.2.3 was checked on 2026-10-05 against official WanGP 13.141, revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, using Python 3.11.11 and Gradio 5.29.0. Compiler and interface checks ran on macOS arm64; the rendered comparisons used the connected Windows WanGP installation. This record distinguishes prompt correctness from observed model behavior.
 
 The elevation report showed that a numerical camera plan could become a frontal approach instead of a climb. Version 0.2.3 describes physical camera movement, separate lens tilt, endpoint framing, and proportional distance adjustments. It preserves the keyframes and scene text. The 75-degree and 5% thresholds select prose; they are not model controls.

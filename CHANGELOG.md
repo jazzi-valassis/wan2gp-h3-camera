@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.4 - 2026-10-05
+
+- Fix misleading orbit wording: a segment turning against the previous orbit now says it reverses direction instead of "continuing", and a segment that keeps the previous orbit angle says the orbit stops.
+- When the next segment holds an orbit angle, end the orbit with an explicit rest point ("come to rest a quarter turn from the starting view, without orbiting past azimuth 90 degrees"). The following elevation segment drops "around the main subject" and states that the camera does not circle the subject and that the subject keeps the same side toward the camera.
+- Rename the editor's **Rotation** field to **Orbit angle (from start)** and add an editable **Segment turn** field, per-keyframe turns in the keyframe strip, and a live description of the selected segment. Editing a turn keeps later keyframes' turns.
+- Elevation segments that keep their orbit angle now add that the camera does not orbit sideways.
+- Label the preview table's orbit column as an angle from the start view. Saved plans and keyframe JSON are unchanged. Paths without stops, reversals, held-angle elevation segments or orbits followed by a held angle compile byte-for-byte as in 0.2.3, including the render-validated three-keyframe path.
+- Add orbit-direction compiler regressions.
+
 ## 0.2.3 - 2026-10-05
 
 - Describe elevation changes as physical camera movement, separate lens tilt, and an explicit endpoint view, including near-overhead framing for high endpoints.

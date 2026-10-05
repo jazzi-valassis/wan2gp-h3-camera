@@ -1,7 +1,7 @@
 {
     "name": "H3 Camera",
     "author": "Jazzi",
-    "version": "0.2.3",
+    "version": "0.2.4",
     "description": "Plan a single H3 camera move visually and apply it to the native prompt, duration, and optional start/end images.",
     "type": ["extension"],
     "wan2gp_version": "13.141",

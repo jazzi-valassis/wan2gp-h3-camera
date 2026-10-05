@@ -37,7 +37,7 @@ class H3CameraPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = "H3 Camera"
-        self.version = "0.2.3"
+        self.version = "0.2.4"
         self.type = ["extension"]
         self.description = "Visual single-shot camera paths for MiniMax H3"
 
@@ -120,7 +120,7 @@ class H3CameraPlugin(WAN2GPPlugin):
             with gr.Row():
                 preview = gr.Button("Preview camera prompt")
                 apply = gr.Button("Apply camera path to generation form", variant="primary")
-            table = gr.Dataframe(headers=["Keyframe", "Time (s)", "Orbit (degrees)", "Elevation (degrees)", "Distance"],
+            table = gr.Dataframe(headers=["Keyframe", "Time (s)", "Orbit angle from start (degrees)", "Elevation (degrees)", "Distance"],
                                  datatype=["number"] * 5, interactive=False)
             compiled = gr.Textbox(label="Camera prompt preview", lines=6, interactive=False)
             status = gr.Markdown()

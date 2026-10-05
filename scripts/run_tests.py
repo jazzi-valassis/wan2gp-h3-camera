@@ -22,7 +22,7 @@ def main():
     os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
     patterns = {
         "all": ("test_h3_camera*.py",),
-        "plan": ("test_h3_camera_plan.py", "test_h3_camera_elevation.py"),
+        "plan": ("test_h3_camera_plan.py", "test_h3_camera_elevation.py", "test_h3_camera_orbit.py"),
         "integration": ("test_h3_camera_plugin.py", "test_h3_camera_labels.py"),
         "native": ("test_h3_camera_roundtrip.py",),
     }

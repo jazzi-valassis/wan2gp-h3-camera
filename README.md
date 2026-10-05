@@ -4,7 +4,7 @@ A visual single-shot camera planner for MiniMax H3 in [WanGP / Wan2GP](https://g
 
 **Author and maintainer:** [Jazzi](https://github.com/jazzi-valassis)
 
-**Version:** 0.2.3 · **License:** [MIT](LICENSE) · **Plugin type:** extension
+**Version:** 0.2.4 · **License:** [MIT](LICENSE) · **Plugin type:** extension
 
 The plugin adds no model downloads, GPU allocations or extra Python dependencies. Camera movement is prompt guidance: the diagram does not impose an exact 3D trajectory on the model.
 
@@ -46,7 +46,7 @@ Enable **H3 Camera**, save settings, and restart WanGP as above.
 
 ### Install from a ZIP
 
-Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.2.3.zip`, run `python scripts/build_release.py`.
+Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.2.4.zip`, run `python scripts/build_release.py`.
 
 The final layout must be:
 
@@ -80,7 +80,7 @@ The repository root contains the plugin files directly, so the public URL can be
 
 ## Compatibility
 
-Version **0.2.3** targets **WanGP 13.141**, upstream revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, with **Gradio 5.29.0**. Older releases are not certified by this package. Future host changes require repeating the compatibility checks.
+Version **0.2.4** targets **WanGP 13.141**, upstream revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, with **Gradio 5.29.0**. Older releases are not certified by this package. Future host changes require repeating the compatibility checks.
 
 The plugin uses `WAN2GPPlugin`, component/global requests, `insert_after`, and `add_custom_js`. Its remaining host imports are the installed `shared.utils.frame_scheduler.normalize_frame_count` and `shared.utils.prompt_parser.split_prompt_units`. These are WanGP dependencies, not additional files to ship. It does not patch the pipeline, launch another server, submit its own generation jobs, or import `h3cam_ref` or MiniMaxH3Mod.
 
@@ -97,6 +97,16 @@ Missing required form controls or injected host functions produce a compatibilit
 
 Select a keyframe in the strip, then drag the diagram horizontally to orbit or vertically to change elevation. The first drag direction locks that axis until release. Focus the diagram and use the mouse wheel to change distance, or use its arrow keys (hold Shift for larger steps). Numeric controls provide precise edits. **Add** inserts a keyframe between the selected pose and the next pose; the first pose stays fixed. Scrub or play to preview the planned move.
 
+### Orbit angle and segment turn
+
+**Orbit angle** is the keyframe's absolute position around the subject, measured from the start view. It is not an amount added at that keyframe. **Segment turn** shows how far the camera orbits since the previous keyframe; the keyframe strip shows it in parentheses. To orbit 90 degrees and then crane overhead without further sideways movement, give the last keyframe the same orbit angle as the previous one (`90`, turn `0`) and raise only its elevation. Setting that keyframe's orbit angle to `0` instead returns the camera to the start side, which the prompt describes as a reversed orbit.
+
+Editing **Segment turn** moves the selected keyframe and shifts every later keyframe by the same amount, so their own turns stay unchanged. Editing **Orbit angle**, dragging, or using the arrow keys moves only the selected keyframe.
+
+The compiled prompt states when a segment stops orbiting and when it reverses the latest orbit direction. An orbit followed by a held angle names its rest point, and the next segment says the camera does not circle the subject. Keyframe values and saved plans keep the same absolute format.
+
+H3 can still overshoot a requested orbit. In the 0.2.4 test renders a 90-degree orbit sometimes reached about 180 degrees before the camera held its angle. Check the result, and reduce the planned angle or add a hold keyframe if the model turns too far.
+
 Applying updates the prompt, makes all lines part of one prompt, aligns the frame count to H3's native `17k+5` grid, selects one sliding window, and sets both trim controls to zero. Existing reference media, audio, LoRAs, model selection, inference settings and memory settings remain in the normal form. Applying again replaces the prior generated camera instructions rather than adding duplicates.
 
 For a **closed loop**, choose a path ending at its original camera pose (for example Full orbit), activate the native **Start Image** and provide exactly one image. Enable the loop checkbox before applying. The plugin copies that image into **End Image**, replacing its previous contents, and enables endpoint conditioning. With no loop requested, the plugin leaves the existing End Image alone. Matching endpoints does not guarantee that H3 completes an orbit.
@@ -107,7 +117,7 @@ Use **Camera path JSON and saved plans** to save or load portable `.json` plans.
 
 ### Elevation moves
 
-When elevation changes, the compiled segment separates movement of the camera from rotation of its lens and describes the endpoint view. High endpoints at 75 degrees or above receive near-overhead wording. Small distance changes of up to 5% within an elevation segment are described as slight percentage adjustments, retaining both distances. Larger distance changes remain explicit dolly instructions. These thresholds select wording; they are not model controls. Paths without elevation changes retain their existing camera wording.
+When elevation changes, the compiled segment separates movement of the camera from rotation of its lens and describes the endpoint view. High endpoints at 75 degrees or above receive near-overhead wording. Small distance changes of up to 5% within an elevation segment are described as slight percentage adjustments, retaining both distances. Larger distance changes remain explicit dolly instructions. These thresholds select wording; they are not model controls. Paths without elevation changes, stops, reversals or orbits ending at a held angle retain their existing camera wording.
 
 The diagram uses spherical distance and elevation around the subject. A large distance change can make camera height fall even while its elevation angle increases. The compiler accounts for this when describing camera travel. It keeps all keyframe values and does not rewrite the scene's subject actions, dialogue, gaze, or audio.
 

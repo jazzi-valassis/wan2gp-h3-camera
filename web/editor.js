@@ -11,6 +11,9 @@
     const round = value => Math.round(value * 1000000) / 1000000;
     const post = (type, value) => parent.postMessage({namespace, type, value}, "*");
     const fmt = value => Number(value.toFixed(2)).toString();
+    const signed = value => (value > 0 ? "+" : "") + fmt(value);
+    // Orbit angles are absolute; a segment's turn is its change from the previous keyframe.
+    const turnOf = index => index ? points[index].azimuth - points[index - 1].azimuth : 0;
     const validPoint = p => p && ["time", "azimuth", "elevation", "distance"].every(k => typeof p[k] === "number" && Number.isFinite(p[k]));
 
     function parsePath(value) {
@@ -116,7 +119,15 @@
             <text class="diagram-label" x="${cx}" y="${cy+26}" text-anchor="middle">Subject</text>
             <circle class="origin-point" cx="${start.x}" cy="${start.y}" r="6"/>
             ${markers}<g transform="translate(${active.x},${active.y})" pointer-events="none"><rect class="camera-icon" x="-10" y="-7" width="15" height="13" rx="2"/><path class="camera-icon" d="M5,-3 L13,-7 L13,6 L5,2Z"/></g>
-            <text class="diagram-label" x="15" y="23">${fmt(at(position).azimuth)}° rotation · ${fmt(at(position).elevation)}° elevation · ${fmt(at(position).distance)}×</text>`;
+            <text class="diagram-label" x="15" y="23">${fmt(at(position).azimuth)}° orbit from start · ${fmt(at(position).elevation)}° elevation · ${fmt(at(position).distance)}×</text>`;
+    }
+    function segmentHelp(index) {
+        const turn = turnOf(index);
+        const prior = index > 1 ? turnOf(index - 1) : 0;
+        const heading = points.slice(1, index).map((_, i) => turnOf(i + 1)).filter(Boolean).at(-1) || 0;
+        if (!turn) return `Same orbit angle as keyframe ${index}: ${prior ? "the orbit stops" : "no sideways orbit"} in this segment.`;
+        const reverse = heading && (turn > 0) !== (heading > 0) ? ", reversing the previous direction" : "";
+        return `This segment orbits ${fmt(Math.abs(turn))}° toward camera ${turn > 0 ? "right" : "left"}${reverse}.`;
     }
     function render() {
         const p = points[selected], fixed = selected === 0;
@@ -127,16 +138,18 @@
         $("time").min = selected ? round((points[selected - 1].time + .00001) * 100) : 0;
         $("time").max = selected < points.length - 1 ? round((points[selected + 1].time - .00001) * 100) : 100;
         ["azimuth", "elevation", "distance"].forEach(key => { $(key).value = fmt(p[key]); $(key).disabled = invalid || fixed; });
+        $("turn").value = fmt(turnOf(selected));
+        $("turn").disabled = invalid || fixed;
         $("distance-range").value = p.distance;
         $("distance-range").disabled = invalid || fixed;
-        $("keyframe-help").textContent = fixed ? "The start view is fixed. Select another keyframe to move the camera." : "Positive rotation moves the camera right. 360° makes one full turn.";
+        $("keyframe-help").textContent = fixed ? "The start view is fixed. Select another keyframe to move the camera." : segmentHelp(selected);
         $("add").disabled = invalid || points.length >= 24;
         $("remove").disabled = invalid || fixed || points.length <= 2;
         $("play").disabled = invalid;
         $("scrub").disabled = invalid;
         $("frame-count").textContent = `${points.length} / 24 keyframes`;
         const focusedFrame = document.activeElement?.dataset.keyframe;
-        $("keyframes").innerHTML = points.map((point, i) => `<button type="button" class="keyframe" data-keyframe="${i}" aria-pressed="${i === selected}" aria-label="Select keyframe ${i+1} at ${timeLabel(point.time)}"${invalid ? " disabled" : ""}>${i === 0 ? "Start" : `Keyframe ${i + 1}`}<span>${timeLabel(point.time)} · ${fmt(point.azimuth)}°</span></button>`).join("");
+        $("keyframes").innerHTML = points.map((point, i) => `<button type="button" class="keyframe" data-keyframe="${i}" aria-pressed="${i === selected}" aria-label="Select keyframe ${i+1} at ${timeLabel(point.time)}, orbit angle ${fmt(point.azimuth)} degrees${i ? `, turn ${signed(turnOf(i))} degrees` : ""}"${invalid ? " disabled" : ""}>${i === 0 ? "Start" : `Keyframe ${i + 1}`}<span>${timeLabel(point.time)} · ${fmt(point.azimuth)}°${i ? ` (${signed(turnOf(i))})` : ""}</span></button>`).join("");
         if (focusedFrame !== undefined) $("keyframes").querySelector(`[data-keyframe="${focusedFrame}"]`)?.focus({preventScroll:true});
         updatePosition();
         resize();
@@ -160,7 +173,22 @@
         }
         edited();
     }
+    function setTurn(value) {
+        if (invalid || !selected || !Number.isFinite(value)) { render(); return; }
+        // Shift this and every later keyframe, so later segments keep their own turns.
+        const shift = round(points[selected - 1].azimuth + value - points[selected].azimuth);
+        const previous = points.map(p => p.azimuth);
+        points.slice(selected).forEach(p => { p.azimuth = round(p.azimuth + shift); });
+        try { parsePath(JSON.stringify(points)); } catch (error) {
+            points.forEach((p, i) => { p.azimuth = previous[i]; });
+            render();
+            showError(error.message);
+            return;
+        }
+        edited();
+    }
     ["azimuth", "elevation", "distance"].forEach(key => $(key).addEventListener("change", e => setCoordinate(key, e.target.valueAsNumber)));
+    $("turn").addEventListener("change", e => setTurn(e.target.valueAsNumber));
     $("distance-range").addEventListener("input", e => setCoordinate("distance", Number(e.target.value)));
     $("time").addEventListener("change", e => {
         if (invalid || selected === 0 || selected === points.length - 1) return;

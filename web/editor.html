@@ -41,8 +41,11 @@
       <label class="control" for="time">Time <span class="unit">% of clip</span>
         <input id="time" type="number" min="0" max="100" step="0.1" value="100">
       </label>
-      <label class="control" for="azimuth">Rotation <span class="unit">degrees</span>
+      <label class="control" for="azimuth">Orbit angle <span class="unit">° from start</span>
         <input id="azimuth" type="number" min="-11520" max="11520" step="1" value="90">
+      </label>
+      <label class="control" for="turn">Segment turn <span class="unit">° since previous</span>
+        <input id="turn" type="number" min="-11520" max="11520" step="1" value="90">
       </label>
       <label class="control" for="elevation">Elevation <span class="unit">degrees</span>
         <input id="elevation" type="number" min="-89" max="89" step="1" value="0">
@@ -51,7 +54,8 @@
         <input id="distance" type="number" min="0.1" max="4" step="0.05" value="1">
       </label>
       <input id="distance-range" type="range" min="0.1" max="4" step="0.05" value="1" aria-label="Camera distance">
-      <p id="keyframe-help" class="hint">Positive rotation moves the camera right. 360° makes one full turn.</p>
+      <p id="keyframe-help" class="hint">This segment orbits 90° toward camera right.</p>
+      <p class="hint">Orbit angle is measured from the start view; positive moves the camera right and 360° is one full turn. A segment turn of 0 stops the orbit. Editing the turn keeps later keyframes' turns.</p>
     </section>
   </div>
   <section class="timeline" aria-label="Camera keyframe timeline">

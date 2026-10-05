@@ -191,7 +191,20 @@ def _block(kind, lines):
     return f"# WanGP H3 camera {kind} begin\n" + "\n".join(lines) + f"\n# WanGP H3 camera {kind} end"
 
 
-def _elevation_segment(left, right):
+def _reverses(da, heading):
+    """Whether this orbit turns against the most recent nonzero orbit."""
+    return bool(da and heading and (da > 0) != (heading > 0))
+
+
+def _rest(right):
+    """Anchor where an orbit ends when the next segment holds that angle; H3 tends to overshoot."""
+    turns = {90: "a quarter turn", 180: "a half turn", 270: "three quarters of a turn", 360: "one full turn"}
+    amount = abs(right["azimuth"])
+    where = turns.get(amount, f"{amount:g} degrees")
+    return f" and come to rest {where} from the starting view, without orbiting past azimuth {right['azimuth']:g} degrees"
+
+
+def _elevation_segment(left, right, previous=0.0, heading=0.0, rests=False):
     da = right["azimuth"] - left["azimuth"]
     de = right["elevation"] - left["elevation"]
     dd = right["distance"] - left["distance"]
@@ -203,12 +216,24 @@ def _elevation_segment(left, right):
         movement = "cranes upward through a rising arc"
     else:
         movement = "descends through a falling arc"
-    text = f"The camera {movement} around the main subject"
-    if da:
-        text += (f", continuing {abs(da):g} degrees toward camera {'right' if da > 0 else 'left'} "
-                 f"(azimuth {left['azimuth']:g} to {right['azimuth']:g} degrees)")
+    side = "right" if da > 0 else "left"
+    span = f"(azimuth {left['azimuth']:g} to {right['azimuth']:g} degrees)"
+    if da and _reverses(da, heading):
+        text = (f"The camera {movement} around the main subject, reversing its orbit to travel "
+                f"{abs(da):g} degrees toward camera {side} {span}")
+    elif da:
+        text = f"The camera {movement} around the main subject, continuing {abs(da):g} degrees toward camera {side} {span}"
+    elif previous:
+        # Azimuth is absolute, so an unchanged value means the orbit ends here.
+        # "Around the subject" invites a continued orbit, so state what stays fixed in the frame.
+        text = (f"The camera stops orbiting and {movement}, holding azimuth at {right['azimuth']:g} degrees. "
+                "It does not circle the subject or travel sideways in this segment; the subject keeps "
+                "the same side toward the camera as at the start of this segment")
     else:
-        text += f", keeping azimuth at {right['azimuth']:g} degrees"
+        text = (f"The camera {movement} around the main subject, keeping azimuth at "
+                f"{right['azimuth']:g} degrees without orbiting sideways")
+    if da and rests:
+        text += _rest(right)
     text += (f". Its viewing elevation changes from {left['elevation']:g} to {right['elevation']:g} degrees "
              f"while the lens tilts {'downward' if de > 0 else 'upward'} to keep the subject framed.")
     if right["elevation"] >= 75:
@@ -233,16 +258,21 @@ def _elevation_segment(left, right):
     return text + " Keep the focal length fixed throughout this move."
 
 
-def _segment(left, right):
+def _segment(left, right, previous=0.0, heading=0.0, rests=False):
+    """Describe one segment; ``previous`` is the prior segment's azimuth change,
+    ``heading`` the latest nonzero one, and ``rests`` whether the next segment
+    keeps this endpoint's azimuth, so stops and reversals read as such."""
     da = right["azimuth"] - left["azimuth"]
     de = right["elevation"] - left["elevation"]
     dd = right["distance"] - left["distance"]
     if de:
-        return _elevation_segment(left, right)
+        return _elevation_segment(left, right, previous, heading, rests)
     changes = []
     if da:
-        changes.append(f"orbit {abs(da):g} degrees toward camera {'right' if da > 0 else 'left'} "
-                       f"(azimuth {left['azimuth']:g} to {right['azimuth']:g} degrees)")
+        changes.append(f"{'reverse direction and orbit' if _reverses(da, heading) else 'orbit'} "
+                       f"{abs(da):g} degrees toward camera {'right' if da > 0 else 'left'} "
+                       f"(azimuth {left['azimuth']:g} to {right['azimuth']:g} degrees)"
+                       + (_rest(right) if rests else ""))
     if dd:
         changes.append(f"{'dolly back' if dd > 0 else 'dolly in'} from {left['distance']:g}x to {right['distance']:g}x the starting distance")
     if not changes:
@@ -252,6 +282,8 @@ def _segment(left, right):
     if not dd:
         unchanged.append(f"distance {right['distance']:g}x")
     text = "; simultaneously ".join(changes)
+    if not da and previous:
+        text = f"stop orbiting and hold azimuth at {right['azimuth']:g} degrees; {text}"
     if unchanged:
         text += "; maintain " + " and ".join(unchanged)
     return text[0].upper() + text[1:] + "."
@@ -298,8 +330,12 @@ def compile_plan(path_json, *, prompt, frame_count, fps, frozen=False, close_loo
         ("Ease smoothly into and out of each segment; briefly settle at each keyframe."
          if interpolation == "smooth" else "Use a constant rate within each segment, changing direction at its keyframes."),
     ]
+    previous = heading = 0.0
     for index, (left, right) in enumerate(zip(path, path[1:])):
-        camera.append(f"[{rows[index][1]:.6f}s–{rows[index + 1][1]:.6f}s] {_segment(left, right)}")
+        rests = index + 2 < len(path) and path[index + 2]["azimuth"] == right["azimuth"]
+        camera.append(f"[{rows[index][1]:.6f}s–{rows[index + 1][1]:.6f}s] {_segment(left, right, previous, heading, rests)}")
+        previous = right["azimuth"] - left["azimuth"]
+        heading = previous or heading
     if close_loop:
         camera.append(f"Complete the full {abs(path[-1]['azimuth']) / 360:g}-turn camera journey and return to the starting viewpoint at the last frame.")
     sections[visual] = sections[visual] + "\n" + _block("plan", camera)
