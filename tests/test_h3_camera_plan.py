@@ -73,7 +73,7 @@ class CameraPlanTests(unittest.TestCase):
         origin, end = json.loads(camera.DEFAULT_PATH)
         result = self.compile(json.dumps([origin, dict(end, time=.5), end]))
         self.assertAlmostEqual(result["rows"][1][1], 2.5625)
-        self.assertIn("[2.562500s–5.125000s] Hold the camera at this pose.", result["prompt"])
+        self.assertIn("[2.562500s–5.125000s] Hold the camera completely stationary for 2.562500 seconds", result["prompt"])
 
     def test_full_loop_requires_real_turn_and_start_image(self):
         with self.assertRaisesRegex(ValueError, "Start Image"):
@@ -157,7 +157,8 @@ class CameraPlanTests(unittest.TestCase):
 
     def test_invalid_timing_options_and_markers(self):
         for name, bad in (("fps", 0), ("fps", float("nan")), ("fps", True), ("frame_count", 4),
-                          ("frame_count", 5.5), ("frame_count", float("inf")), ("interpolation", "cubic"), ("frozen", "false")):
+                          ("frame_count", 5.5), ("frame_count", float("inf")), ("interpolation", "cubic"),
+                          ("frozen", "false"), ("stabilize_roll", "false")):
             with self.subTest(name=name, value=bad), self.assertRaises(ValueError):
                 self.compile(**{name: bad})
         with self.assertRaisesRegex(ValueError, "marker"):

@@ -32,7 +32,7 @@ class OrbitDirectionTests(unittest.TestCase):
         self.assertIn("The camera stops orbiting and cranes upward", second)
         self.assertIn("holding azimuth at 90 degrees", second)
         self.assertIn("does not circle the subject or travel sideways", second)
-        self.assertIn("the subject keeps the same side toward the camera", second)
+        self.assertIn("the camera stays on the same azimuth side of the subject", second)
         self.assertNotRegex(second, r"continuing|toward camera (?:left|right)|around the main subject")
         self.assertIn("almost directly above the subject", second)
 
@@ -60,7 +60,7 @@ class OrbitDirectionTests(unittest.TestCase):
             "[2.562500s–5.125000s] Reverse direction and orbit 120 degrees toward camera left (azimuth 90 to -30 degrees)"))
         first, hold, back = segments(pose(.3, -90), pose(.6, -90), pose(1, 0))
         self.assertIn("toward camera left", first)
-        self.assertTrue(hold.endswith("Hold the camera at this pose."))
+        self.assertIn("Hold the camera completely stationary", hold)
         self.assertIn("Reverse direction and orbit 90 degrees toward camera right", back)
 
     def test_dolly_after_orbit_states_that_the_orbit_stops(self):
@@ -72,12 +72,12 @@ class OrbitDirectionTests(unittest.TestCase):
         self.assertIn("keeping azimuth at 0 degrees without orbiting sideways", only)
         self.assertNotIn("stops orbiting", only)
 
-    def test_render_validated_023_path_is_byte_identical(self):
+    def test_render_validated_023_linear_path_is_byte_identical_with_roll_option_off(self):
         scene = (Path(__file__).with_name("test_h3_camera_elevation.py").read_text(encoding="utf-8")
                  .split('SCENE_PROMPT = """')[1].split('"""')[0])
         path = json.dumps([camera.ORIGIN, pose(.5, 67.5226, 15.0955, 1.025), pose(1, 92.2188, 81)])
         result = camera.compile_plan(path, prompt=scene, frame_count=124, fps=24,
-                                     reference_mode=True, interpolation="linear")
+                                     reference_mode=True, interpolation="linear", stabilize_roll=False)
         self.assertEqual(hashlib.sha256(result["prompt"].encode("utf-8")).hexdigest(),
                          "76ada2bdf073d3940b0d80876e5526039dd05d73d38b8b60da4d1dd99e898943")
 

@@ -60,14 +60,14 @@
   </div>
   <section class="timeline" aria-label="Camera keyframe timeline">
     <div class="timeline-toolbar">
-      <div class="actions"><button id="play" type="button" aria-pressed="false">Play preview</button><button id="add" type="button">Add keyframe</button><button id="remove" type="button">Remove</button></div>
+      <div class="actions"><button id="play" type="button" aria-pressed="false">Play preview</button><button id="add" type="button">Add keyframe</button><button id="hold" type="button" title="Duplicate the selected pose 0.5 seconds later, keeping all existing keyframe times. Select a pose before the last keyframe.">Add 0.5s hold</button><button id="remove" type="button">Remove</button></div>
       <span id="frame-count" class="muted">2 / 24 keyframes</span>
     </div>
     <div id="keyframes" class="keyframes" aria-label="Select a keyframe"></div>
     <label class="scrub-label" for="scrub"><span>Preview position</span><output id="scrub-time">0%</output></label>
     <input id="scrub" type="range" min="0" max="1000" step="1" value="0" aria-label="Preview position">
   </section>
-  <p class="footnote">The start view stays fixed. This plans prompt instructions; H3 may approximate the path.</p>
+  <p class="footnote">The start view stays fixed. Add a hold after a selected pose, then edit its end time to adjust the pause. Smooth easing changes speed within each segment. H3 may still approximate the path and timing.</p>
   <p id="connection" class="hint" role="status">Connecting to the generation form…</p>
 </main>
 <script>/* CAMERA_EDITOR_JS */</script>

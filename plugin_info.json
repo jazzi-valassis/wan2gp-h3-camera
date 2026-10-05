@@ -1,10 +1,10 @@
 {
     "name": "H3 Camera",
     "author": "Jazzi",
-    "version": "0.2.4",
-    "description": "Plan a single H3 camera move visually and apply it to the native prompt, duration, and optional start/end images.",
+    "version": "0.2.9",
+    "description": "Plan H3 camera moves, extract image checkpoints, and align a generated hold to the planned frame boundaries.",
     "type": ["extension"],
-    "wan2gp_version": "13.141",
-    "date": "2026-10-05",
+    "wan2gp_version": "17.01",
+    "date": "2026-10-06",
     "url": "https://github.com/jazzi-valassis/wan2gp-h3-camera"
 }

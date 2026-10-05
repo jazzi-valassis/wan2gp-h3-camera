@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.2.9 - 2026-10-06
+
+- Added bounded automatic checking/correction of up to three existing candidate renders, stopping at the first passing output.
+- Added independent post-export hold measurement, background tracking/movement gates and automatic speed limits. Failed candidates return reasons; all-failed runs return no video. Invalid input clears the previous result.
+- Reports explicitly leave camera geometry and roll unverified. This feature does not launch GPU retries.
+- Seven new regression tests cover failed-source/output rejection, candidate fallback, unavailable tracking, static shots, correction limits and native API registration.
+
+## 0.2.8 - 2026-10-06
+
+- Add extraction of a selected video frame into the movement-checkpoint image control. Approach checkpoints can guide a camera that reaches its held view early.
+- Add optional post-generation timing correction for one interior hold. Editable arrival/departure marks map to exact output frames while retaining clip duration, FPS, dimensions and endpoints.
+- Suggest source marks using background motion, with explicit review guidance. Validate actual frame timestamps and reject unsupported variable-rate clips.
+- Provide pitch-preserving audio retiming, unchanged audio timing or muted output, and nearest-frame or blended sampling. Source clips remain intact; unique exports include a detailed timing report.
+- Add 11 tests covering exact frame mapping, real encoded boundary images, source preservation, native UI registration, extraction, irregular timestamps and audio modes.
+
+## 0.2.7 - 2026-10-06
+
+- Compile timed images inside camera segments as movement checkpoints. Their instructions now specify when to pass through the view without introducing a stop. Images inside stationary holds keep stationary wording.
+- Add **Movement image checkpoints** with a view image, time in seconds, and an Apply button. Saved camera geometry, keyframe times, hold duration and clip duration are preserved.
+- Merge native injected images while retaining existing holds, end images and references. Renumber Picture roles using the native host's actual image order, including earlier insertions and duplicate positions. Repeated application replaces the same checkpoint.
+- Preserve later checkpoints when reapplying the hold helper, and reject inactive references or unsupported injection timelines before form changes.
+- Validate native FPS before mapping image times, including rejecting zero FPS without a division error.
+- Add eight regression tests for timed pass-through instructions, unchanged paths, native ordering, replacement, hold preservation and invalid inputs.
+- Validate five new renders across two seeds and the original tiny hold. The selected checkpoint improves late departure while preserving the side-view hold; exact arrival timing remains approximate. See VALIDATION.md.
+
+## 0.2.6 - 2026-10-06
+
+- Add **Anchor hold and apply camera path** for H3 Ref2VA. A supplied held-view image conditions both hold boundaries through native Inject Frames; other references and their Picture labels are preserved.
+- Link camera segments to actual native image labels, including sorted/deduplicated injections and an active end image. Repeat application does not accumulate images or prompt blocks.
+- Preserve saved path times and round only injection positions to displayed frames. Reject conflicting injection timelines, missing media, unsupported models and ambiguous endpoint galleries without modifying the form.
+- Keep ordinary planning available when only the optional timed-image helper is missing. Record the installed v17.01 host used for validation.
+- Add compiler and native-form regression coverage. Render trials show that image anchors correct the tested orbit overshoot and hold drift at two seeds, while departure timing remains approximate. Additional text-only wording trials did not fix the motion and are not included.
+
+## 0.2.5 - 2026-10-05
+
+- Keep the stopped-orbit instruction through intervening holds and dollies. Fixed-azimuth elevation no longer reintroduces "around the main subject" after a pause.
+- Describe stationary holds with their exact duration and pose, and ask preceding moves to stop before a hold. Smooth easing now separates speed easing from corner rounding, with no implied extra dwell.
+- Add optional **Stabilize camera roll**, enabled by default, and preserve the choice in saved plans. Older plans load with stabilization on.
+- Add **Add 0.5s hold** without shifting existing keyframe times, mark hold keyframes, and show advice for pauses shorter than 0.5 seconds. This advice is not a validated model threshold and does not rewrite timing.
+- Use the same native frame alignment in the editor timing and Apply, so an inserted half-second hold retains its duration.
+- Preserve scene actions while constraining the camera's azimuth; remove wording that could force an animated subject to keep the same side toward the camera.
+- Add regressions for the reported 50%–51% hold, timing preservation, repeated application, roll settings, saved plans and native timing alignment.
+- Record a three-render comparison of 0.101-, 0.5- and 1-second holds at one fixed seed. All reach overhead, but longer holds do not reliably stop the camera or prevent orbit overshoot. The roll option's effect is not isolated; see VALIDATION.md.
+
 ## 0.2.4 - 2026-10-05
 
 - Fix misleading orbit wording: a segment turning against the previous orbit now says it reverses direction instead of "continuing", and a segment that keeps the previous orbit angle says the orbit stops.

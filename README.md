@@ -4,9 +4,9 @@ A visual single-shot camera planner for MiniMax H3 in [WanGP / Wan2GP](https://g
 
 **Author and maintainer:** [Jazzi](https://github.com/jazzi-valassis)
 
-**Version:** 0.2.4 · **License:** [MIT](LICENSE) · **Plugin type:** extension
+**Version:** 0.2.9 · **License:** [MIT](LICENSE) · **Plugin type:** extension
 
-The plugin adds no model downloads, GPU allocations or extra Python dependencies. Camera movement is prompt guidance: the diagram does not impose an exact 3D trajectory on the model.
+The plugin adds no model downloads or GPU allocations. Camera movement is prompt guidance: the diagram does not impose an exact 3D trajectory on the model. Optional timing tools use FFmpeg/FFprobe on PATH and WanGP's existing OpenCV, NumPy and Pillow packages.
 
 ## Features
 
@@ -15,6 +15,11 @@ The plugin adds no model downloads, GPU allocations or extra Python dependencies
 - Preview without changing the generation form; Apply replaces the previous camera plan while retaining scene, audio and reference instructions.
 - Portable JSON plans and optional closed-loop conditioning using the existing Start Image.
 - Elevation instructions describe physical camera movement, lens tilt, and the requested endpoint view.
+- Optional roll stabilization, explicit stationary holds, and a button to insert a half-second hold.
+- Native image anchors at both ends of a hold, with automatic Picture numbering and reference preservation.
+- Timed image checkpoints within a move, with pass-through instructions that do not add stops or alter the saved path.
+- Extract a checkpoint image directly from a reviewed video frame.
+- Optional timing correction for an existing clip: align selected arrival/departure frames to one planned hold, with explicit audio and frame-sampling choices.
 
 ## Install
 
@@ -46,7 +51,7 @@ Enable **H3 Camera**, save settings, and restart WanGP as above.
 
 ### Install from a ZIP
 
-Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.2.4.zip`, run `python scripts/build_release.py`.
+Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.2.9.zip`, run `python scripts/build_release.py`. Use the Git installation method for the latest source version; downloadable releases may lag behind main.
 
 The final layout must be:
 
@@ -59,6 +64,8 @@ Wan2GP/
       plugin_info.json
       camera_plan.py
       editor.py
+      image_anchors.py
+      timing.py
       web/
 ```
 
@@ -80,9 +87,9 @@ The repository root contains the plugin files directly, so the public URL can be
 
 ## Compatibility
 
-Version **0.2.4** targets **WanGP 13.141**, upstream revision `b8b18f8114e432eea8f3d7e853a51dd91fa99571`, with **Gradio 5.29.0**. Older releases are not certified by this package. Future host changes require repeating the compatibility checks.
+Version **0.2.9** is tested with the installed **WanGP v17.01**, host HEAD `0e58385fbde7ff102d276e4a9e490845de76b4ea` with existing local host edits, and **Gradio 5.29.0**. Image anchoring needs the native `shared.prompt_enhancer.images.window_contexts` and `resolve_injected_positions` helpers and an H3 Ref2VA model supporting Inject Frames. If those helpers are absent, the image-anchor buttons are disabled; ordinary prompt planning remains available when the other requested host APIs exist. Timing correction needs FFmpeg/FFprobe on PATH. Older releases are not certified for the new image workflow. See [VALIDATION.md](VALIDATION.md) for the exact local checks.
 
-The plugin uses `WAN2GPPlugin`, component/global requests, `insert_after`, and `add_custom_js`. Its remaining host imports are the installed `shared.utils.frame_scheduler.normalize_frame_count` and `shared.utils.prompt_parser.split_prompt_units`. These are WanGP dependencies, not additional files to ship. It does not patch the pipeline, launch another server, submit its own generation jobs, or import `h3cam_ref` or MiniMaxH3Mod.
+The plugin uses `WAN2GPPlugin`, component/global requests, `insert_after`, and `add_custom_js`, plus the installed frame scheduler, prompt parser and native image-label helper. These are WanGP dependencies, not additional files to ship. It does not patch the pipeline, launch another server, submit its own generation jobs, or import `h3cam_ref` or MiniMaxH3Mod.
 
 Missing required form controls or injected host functions produce a compatibility message when WanGP can render the insertion point. The plugin also requests WanGP's native prompt/duration label helpers and prompt-tool attachment script to keep labels synchronized after Apply. The static version field is not a promise that every older or future host layout works.
 
@@ -92,7 +99,7 @@ Missing required form controls or injected host functions produce a compatibilit
 2. Select an H3 **FL2VA** or **Ref2VA** video model. Compatible H3 Multishot variants also work for one shot.
 3. Write one scene in the main prompt, including any desired dialogue and sound. Set the native frame count and FPS.
 4. Open **H3 Camera - single-shot planner** below the prompt. Choose a preset, edit keyframes and preview the camera move. Time is normalized across the selected clip, with the final pose at its last frame.
-5. Choose whether the scene can animate (default) or is frozen, and smooth or linear camera movement. **Preview camera prompt** changes no generation settings.
+5. Choose whether the scene can animate (default) or is frozen, and smooth or linear camera movement. **Stabilize camera roll** is on by default; turn it off for intentional banking or lens-axis rotation. **Preview camera prompt** changes no generation settings.
 6. Click **Apply camera path to generation form**, then use the normal **Generate** or **Add to Queue** button. Apply again after editing the path, scene, or duration.
 
 Select a keyframe in the strip, then drag the diagram horizontally to orbit or vertically to change elevation. The first drag direction locks that axis until release. Focus the diagram and use the mouse wheel to change distance, or use its arrow keys (hold Shift for larger steps). Numeric controls provide precise edits. **Add** inserts a keyframe between the selected pose and the next pose; the first pose stays fixed. Scrub or play to preview the planned move.
@@ -103,9 +110,15 @@ Select a keyframe in the strip, then drag the diagram horizontally to orbit or v
 
 Editing **Segment turn** moves the selected keyframe and shifts every later keyframe by the same amount, so their own turns stay unchanged. Editing **Orbit angle**, dragging, or using the arrow keys moves only the selected keyframe.
 
-The compiled prompt states when a segment stops orbiting and when it reverses the latest orbit direction. An orbit followed by a held angle names its rest point, and the next segment says the camera does not circle the subject. Keyframe values and saved plans keep the same absolute format.
+The compiled prompt states when a segment stops orbiting and when it reverses the latest orbit direction. An orbit followed by a held angle names its rest point, and later segments at that angle retain the stopped-orbit instruction, including after a pause. This constrains the camera's side without instructing an animated subject to stop turning. Keyframes keep the same absolute format.
 
-H3 can still overshoot a requested orbit. In the 0.2.4 test renders a 90-degree orbit sometimes reached about 180 degrees before the camera held its angle. Check the result, and reduce the planned angle or add a hold keyframe if the model turns too far.
+H3 can still overshoot a requested orbit. In the 0.2.4 test renders a 90-degree orbit sometimes reached about 180 degrees before the camera held its angle. The local 0.2.5 comparison also overshot, including with 0.5- and 1-second holds. Review the render; a hold is not a guaranteed correction. A smaller planned angle is a separate experiment and changes the intended path.
+
+The 0.2.6 image-anchor workflow below reached the intended side view and held it in the tested robot scene at two seeds. It still permits timing drift: the camera can dwell beyond the requested hold before rising. Text-only Apply has no geometric enforcement, and merely installing this version does not add image conditioning to existing jobs.
+
+Version 0.2.7 adds a movement checkpoint to guide departure from the hold. It also includes native images between camera keyframes in the compiled instructions; 0.2.6 only linked images coinciding with keyframes. The new checkpoint is a view to pass through, so it does not introduce another stop or change the original path times.
+
+With the selected image checkpoint, both tested seeds resumed sustained background motion at 5.625 seconds after a hold ending at 5.541667 seconds. The previous same-seed comparison resumed at 6.625 seconds. This corrects the tested late departure; arrival at the side view can still occur early. See [VALIDATION.md](VALIDATION.md) for measurements and the configured local example.
 
 Applying updates the prompt, makes all lines part of one prompt, aligns the frame count to H3's native `17k+5` grid, selects one sliding window, and sets both trim controls to zero. Existing reference media, audio, LoRAs, model selection, inference settings and memory settings remain in the normal form. Applying again replaces the prior generated camera instructions rather than adding duplicates.
 
@@ -113,11 +126,62 @@ For a **closed loop**, choose a path ending at its original camera pose (for exa
 
 If reference images are active, adding an End Image changes their H3 picture numbers. The plugin stops this operation with an explanation: first enable and fill the native End Image, then update the scene's picture labels (Start Image is Picture 1, End Image is Picture 2, other images follow). An already active, populated End Image keeps its existing position when replaced.
 
-Use **Camera path JSON and saved plans** to save or load portable `.json` plans. Saved plans include keyframes, scene-motion choice, interpolation and loop choice. They do not overwrite the main scene prompt or duration. Bare keyframe arrays from the original editor are supported when they satisfy the normalized schema. The ordinary WanGP queue stores the compiled prompt and generation settings, so queued jobs do not need the planner to run.
+Use **Camera path JSON and saved plans** to save or load portable `.json` plans. Saved plans include keyframes, scene-motion choice, interpolation, loop choice and roll stabilization. Older plans and bare keyframe arrays load with stabilization on. They do not overwrite the main scene prompt or duration. Bare keyframe arrays from the original editor are supported when they satisfy the normalized schema. The ordinary WanGP queue stores the compiled prompt and generation settings, so queued jobs do not need the planner to run.
+
+### Image anchors for a camera hold
+
+1. Select H3 **Ref2VA**, add exactly one active **Start Image**, and make a hold using two identical poses at different times.
+2. Open **Image anchors for a camera hold**. Supply an image of the desired held view, such as a reviewed side-view frame from a previous render. Use the Start Image's aspect ratio: native Inject Frames takes its canvas from the first injected image.
+3. Set **Hold starts at keyframe** to the first of those equal poses (usually 2 for orbit, hold, rise). Click **Anchor hold and apply camera path**, then Generate normally.
+
+The button puts two copies of that image at the nearest displayed frames to the hold boundaries, using native 1-based frame positions. It preserves normalized keyframe times, retains the remaining reference images, and updates their `<Picture N>` labels in the scene. Start and active End Image numbers remain unchanged. The prompt links the incoming move, hold and departure to the native images; an active end image is also linked to the final camera segment. Repeated application at the same boundaries does not duplicate images or renumber them again.
+
+This helper handles one interior hold per clip. Conflicting positions for the first two injected images are rejected without changing the form; later movement checkpoints are preserved. After changing hold timing or clip duration, update the first two native frame positions to the new boundaries before using the helper again. Ordinary Apply reads existing injection positions; it does not move them. An endpoint hold should use the native Start/End Image controls.
+
+Images constrain appearance and subject pose at their anchor frames as well as the camera view. They do not enforce a calibrated 3D angle, exact departure time, or roll lock. Saved camera-plan JSON does not embed media or injection settings; save the native WanGP generation settings/queue to keep those inputs together.
+
+### Guide departure with a movement checkpoint
+
+1. Apply the held-view image as above. Open **Movement image checkpoints**.
+2. Supply a view that already shows the next camera movement. For the orbit/hold/rise example, use an elevated side view from a reviewed render, with the desired screen orientation and the Start Image's aspect ratio. To guide arrival, use a view still approaching the stop and place it shortly before the hold.
+3. Set **Checkpoint time (seconds)** shortly after the hold. The tested half-second hold ends at 5.541667 seconds and uses a checkpoint at 6.541667 seconds.
+4. Click **Add or replace movement checkpoint and apply**, then Generate normally.
+
+The time is rounded to the nearest displayed frame. The checkpoint must lie strictly inside a moving segment, away from its camera keyframes and holds. The plugin adds its image through native Inject Frames, updates existing Picture references according to the host's actual image order, and asks the camera to pass through that view without stopping. The original keyframes and times remain unchanged. Ordinary Apply also recognizes manually configured images inside segments.
+
+**Extract a checkpoint from an earlier render** avoids saving a PNG manually. Choose the video and a 1-based source frame, then click **Use this video frame as the checkpoint image**. Review the extracted view and set its time in the new clip before applying. The source frame's time and the new checkpoint time are separate controls; extraction does not alter the camera path or generation form.
+
+### Correct the timing of an existing clip
+
+**Automatically check and correct candidates** accepts one to three existing renders in preference order. It measures each source, corrects its timing, then independently measures the encoded output. Only a passing output is returned; otherwise it returns a rejection report and clears the video preview. No GPU generation or automatic rerender is launched.
+
+Automatic acceptance requires at least 90% valid background tracking in each segment, movement on at least 60% of tracked pairs before and after the hold, a stationary hold of at least three frame intervals, correction speeds within 0.5x to 2x, and output hold boundaries matching the planned displayed frames exactly. These conservative thresholds can reject otherwise usable clips. Use the manual controls below for reviewed exceptions. A passing result certifies these motion/timing checks only: camera angles, viewpoint correctness, roll, scene consistency and audio quality still need visual/listening review. The JSON report records every attempted candidate and its rejection reason or measurements.
+
+1. Load the matching camera plan. Open **Correct timing in a generated clip** and supply a video that already contains the wanted orbit, stationary hold and rise.
+2. Choose the keyframe starting the planned hold. Click **Suggest arrival and departure frames**. Review the clip and adjust those 1-based source frame numbers if needed.
+3. Choose audio handling. **Retime with video** applies the same section boundaries with pitch-preserving tempo changes. **Keep original audio timeline** is useful when ambience or a fixed music track should remain unchanged. **Remove audio** exports video only. Review dialogue and sharp sound events after retiming.
+4. Choose **Nearest frame** to preserve individual source images, accepting repeated/dropped frames, or **Blend neighboring frames** to blend fractional positions, accepting possible ghosting.
+5. Click **Export clip with corrected timing**. Download the new clip and its timing report. The source remains intact.
+
+The selected source arrival/departure frames map exactly to the chosen hold boundaries. Boundaries round to displayed frames using the uploaded clip's actual frame count and FPS. The first/last frame, duration, frame count and dimensions remain fixed. All motion and other events inside each section are retimed together. This tool aligns one interior hold; it does not recover camera geometry or repair an incorrect viewpoint. Background-motion suggestions can fail with moving scenery, a large foreground subject or little texture, so the source marks remain editable.
+
+Exports support constant-frame-rate single shots of 3–481 frames with even dimensions. They are written under WanGP's configured video output directory, or `local_runtime/h3_camera_exports` if that host global is unavailable. Filenames are unique. A separate `.timing.json` report records the source hash, exact boundary mapping, every sampled source position, audio handling and verification. Original generation metadata is not copied onto the edited video as though it were an unedited render; the report identifies its source.
+
+Applying again at the same frame replaces that checkpoint image without adding another. A different time adds another checkpoint; use native injection positions to move an existing one, and review Picture numbering if images are reordered. The hold button retains added checkpoints when reapplied at the same hold boundaries. Image helpers reject unused Reference Images, incomplete injections and positions outside the one-shot timeline rather than silently activating or dropping those inputs.
+
+### Stops and roll stabilization
+
+A hold uses two identical camera poses at different times. Select a pose before the last keyframe and click **Add 0.5s hold** to duplicate it half a second later. Edit the new keyframe's time to adjust the pause. Existing keyframe times stay fixed, so the following move gets less time. If there is not enough room before the next keyframe, the editor asks you to adjust the timing first. Timing uses the same native frame alignment as Apply.
+
+The prompt describes a hold as a stationary camera with fixed position, viewing direction and focal length, for its full duration. Subject and environment movement still follow the selected scene-motion setting. Smooth easing requests smooth acceleration/deceleration within each segment, reaching and stopping at its endpoint before the next move. It does not request rounded path corners or invent a pause between segments.
+
+Holds shorter than 0.5 seconds show advice in the editor and Preview/Apply summary. This is a suggested starting point for a visible-stop test, not a measured H3 minimum. For example, the reported 50%–51% hold at 243 frames and 24 fps lasts about 0.101 seconds (2.42 frame intervals). In the local one-seed comparison, extending that hold to 0.5 or 1 second did not produce a reliable stop; see [VALIDATION.md](VALIDATION.md). All entered times are preserved; the plugin does not lengthen holds automatically.
+
+**Stabilize camera roll** requests an upright camera relative to world up, with pan/tilt tracking and no banking or twisting near overhead. Keeping a subject framed does not, by itself, specify lens-axis roll. This checkbox adds prompt guidance; it is not a geometric camera lock. Turn it off if the scene deliberately calls for roll, and press Apply again after changing it.
 
 ### Elevation moves
 
-When elevation changes, the compiled segment separates movement of the camera from rotation of its lens and describes the endpoint view. High endpoints at 75 degrees or above receive near-overhead wording. Small distance changes of up to 5% within an elevation segment are described as slight percentage adjustments, retaining both distances. Larger distance changes remain explicit dolly instructions. These thresholds select wording; they are not model controls. Paths without elevation changes, stops, reversals or orbits ending at a held angle retain their existing camera wording.
+When elevation changes, the compiled segment separates movement of the camera from rotation of its lens and describes the endpoint view. High endpoints at 75 degrees or above receive near-overhead wording. Small distance changes of up to 5% within an elevation segment are described as slight percentage adjustments, retaining both distances. Larger distance changes remain explicit dolly instructions. These thresholds select wording; they are not model controls. Elevation at a fixed azimuth avoids wording that invites circling the subject, including after a hold.
 
 The diagram uses spherical distance and elevation around the subject. A large distance change can make camera height fall even while its elevation angle increases. The compiler accounts for this when describing camera travel. It keeps all keyframe values and does not rewrite the scene's subject actions, dialogue, gaze, or audio.
 

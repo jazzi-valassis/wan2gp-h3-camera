@@ -196,6 +196,49 @@ def _reverses(da, heading):
     return bool(da and heading and (da > 0) != (heading > 0))
 
 
+def _is_hold(left, right):
+    return all(left[field] == right[field] for field in FIELDS[1:])
+
+
+def keyframe_frame(pose, frames):
+    """Nearest displayed frame, zero based; keep saved normalized times intact."""
+    return int(math.floor(pose["time"] * (frames - 1) + 0.5))
+
+
+def _image_anchor_map(anchors, frames):
+    result = {}
+    for anchor in anchors or ():
+        if not isinstance(anchor, dict) or set(anchor) != {"frame", "picture"}:
+            raise ValueError("Each image anchor needs a frame and picture number.")
+        frame, picture = anchor["frame"], anchor["picture"]
+        if (type(frame) is not int or not 0 <= frame < frames or type(picture) is not int or picture < 1):
+            raise ValueError("Image anchors need a valid zero-based frame and positive picture number.")
+        if frame in result:
+            raise ValueError("Only one image anchor may own a frame.")
+        result[frame] = picture
+    return result
+
+
+def _anchored_segment(left, right, frames, anchors, fps):
+    first = anchors.get(keyframe_frame(left, frames))
+    last = anchors.get(keyframe_frame(right, frames))
+    if _is_hold(left, right) and first and last:
+        text = (f" Keep the camera composition from <Picture {first}> through <Picture {last}> "
+                "for the entire interval; subject motion still follows the scene instructions.")
+    else:
+        text = f" Start from the camera composition shown in <Picture {first}>." if first else ""
+        if last:
+            text += f" Reach the camera composition shown in <Picture {last}> at the end of this segment."
+    for frame, picture in sorted(anchors.items()):
+        if keyframe_frame(left, frames) < frame < keyframe_frame(right, frames):
+            if _is_hold(left, right):
+                text += f" At {frame / fps:.6f}s, maintain the stationary camera composition shown in <Picture {picture}>."
+            else:
+                text += (f" At {frame / fps:.6f}s, pass through the camera composition shown in <Picture {picture}> "
+                         "without stopping; continue this same camera move immediately beyond that view.")
+    return text
+
+
 def _rest(right):
     """Anchor where an orbit ends when the next segment holds that angle; H3 tends to overshoot."""
     turns = {90: "a quarter turn", 180: "a half turn", 270: "three quarters of a turn", 360: "one full turn"}
@@ -223,14 +266,15 @@ def _elevation_segment(left, right, previous=0.0, heading=0.0, rests=False):
                 f"{abs(da):g} degrees toward camera {side} {span}")
     elif da:
         text = f"The camera {movement} around the main subject, continuing {abs(da):g} degrees toward camera {side} {span}"
-    elif previous:
+    elif previous or heading:
         # Azimuth is absolute, so an unchanged value means the orbit ends here.
         # "Around the subject" invites a continued orbit, so state what stays fixed in the frame.
-        text = (f"The camera stops orbiting and {movement}, holding azimuth at {right['azimuth']:g} degrees. "
-                "It does not circle the subject or travel sideways in this segment; the subject keeps "
-                "the same side toward the camera as at the start of this segment")
+        transition = "stops orbiting" if previous else "keeps its orbit stopped"
+        text = (f"The camera {transition} and {movement}, holding azimuth at {right['azimuth']:g} degrees. "
+                "It does not circle the subject or travel sideways in this segment; the camera stays "
+                "on the same azimuth side of the subject throughout this segment")
     else:
-        text = (f"The camera {movement} around the main subject, keeping azimuth at "
+        text = (f"The camera {movement}, keeping azimuth at "
                 f"{right['azimuth']:g} degrees without orbiting sideways")
     if da and rests:
         text += _rest(right)
@@ -258,7 +302,7 @@ def _elevation_segment(left, right, previous=0.0, heading=0.0, rests=False):
     return text + " Keep the focal length fixed throughout this move."
 
 
-def _segment(left, right, previous=0.0, heading=0.0, rests=False):
+def _segment(left, right, previous=0.0, heading=0.0, rests=False, duration=0.0):
     """Describe one segment; ``previous`` is the prior segment's azimuth change,
     ``heading`` the latest nonzero one, and ``rests`` whether the next segment
     keeps this endpoint's azimuth, so stops and reversals read as such."""
@@ -276,21 +320,27 @@ def _segment(left, right, previous=0.0, heading=0.0, rests=False):
     if dd:
         changes.append(f"{'dolly back' if dd > 0 else 'dolly in'} from {left['distance']:g}x to {right['distance']:g}x the starting distance")
     if not changes:
-        return "Hold the camera at this pose."
+        return (f"Hold the camera completely stationary for {duration:.6f} seconds at azimuth "
+                f"{right['azimuth']:g} degrees, elevation {right['elevation']:g} degrees and distance "
+                f"{right['distance']:g}x the starting distance. Lock camera position, viewing direction "
+                "and focal length: no orbit, crane, dolly, pan, tilt or roll during this interval. "
+                "Stay stationary for the entire interval; subject motion still follows the scene instructions.")
     unchanged = []
     unchanged.append(f"elevation {right['elevation']:g} degrees")
     if not dd:
         unchanged.append(f"distance {right['distance']:g}x")
     text = "; simultaneously ".join(changes)
-    if not da and previous:
-        text = f"stop orbiting and hold azimuth at {right['azimuth']:g} degrees; {text}"
+    if not da and (previous or heading):
+        transition = "stop orbiting" if previous else "keep the orbit stopped"
+        text = f"{transition} and hold azimuth at {right['azimuth']:g} degrees; {text}"
     if unchanged:
         text += "; maintain " + " and ".join(unchanged)
     return text[0].upper() + text[1:] + "."
 
 
 def compile_plan(path_json, *, prompt, frame_count, fps, frozen=False, close_loop=False,
-                 reference_mode=False, has_start_image=False, interpolation="smooth"):
+                 reference_mode=False, has_start_image=False, interpolation="smooth", stabilize_roll=True,
+                 image_anchors=()):
     """Return a single-shot prompt, timing, display rows, and safe form settings.
 
     ``rows`` contains [keyframe_number, seconds, azimuth, elevation, distance].
@@ -301,11 +351,13 @@ def compile_plan(path_json, *, prompt, frame_count, fps, frozen=False, close_loo
     """
     path = validate_path(path_json)
     frames = normalize_frames(frame_count)
+    anchors = _image_anchor_map(image_anchors, frames)
     rate = _finite_number(fps, "Frame rate")
     if rate <= 0:
         raise ValueError("Frame rate must be positive.")
     for name, value in (("frozen", frozen), ("close_loop", close_loop),
-                        ("reference_mode", reference_mode), ("has_start_image", has_start_image)):
+                        ("reference_mode", reference_mode), ("has_start_image", has_start_image),
+                        ("stabilize_roll", stabilize_roll)):
         if not isinstance(value, bool):
             raise ValueError(f"{name} must be true or false.")
     if interpolation not in ("smooth", "linear"):
@@ -324,16 +376,34 @@ def compile_plan(path_json, *, prompt, frame_count, fps, frozen=False, close_loo
         f"Camera plan: one continuous take, {frames} frames at {rate:g} fps; last frame at {end_seconds:.6f}s. No cuts.",
         "Camera coordinates are relative to the starting view, looking toward the main subject: azimuth 0 degrees, elevation 0 degrees, distance 1x. "
         "Positive azimuth means the camera travels to its right around the subject; angles stay unwrapped across full turns. "
-        "Move the camera through the scene with natural parallax while keeping the subject framed.",
+        "Move the camera through the scene with natural parallax while keeping the subject framed."
+        + (" Stabilize camera roll throughout the take: keep the camera upright relative to world up, "
+           "with no banking, Dutch angle or rotation around the lens axis. Use pan and tilt for framing "
+           "corrections without adding roll. As the view approaches overhead, preserve the screen orientation without twisting."
+           if stabilize_roll else ""),
         ("Frozen scene: keep subjects, expressions, objects, water, smoke and background motion still; only the camera moves. Preserve the requested soundtrack."
          if frozen else "Allow the subject and environment to move naturally according to the scene description, with requested speech and action synchronized to the audio."),
-        ("Ease smoothly into and out of each segment; briefly settle at each keyframe."
+        ("Ease smoothly into and out of each segment; reach each keyframe and stop before starting the next segment. "
+         "Smooth the speed within each segment, without rounding off path corners or blending adjacent moves. "
+         "Pause only for explicitly timed hold intervals."
          if interpolation == "smooth" else "Use a constant rate within each segment, changing direction at its keyframes."),
     ]
     previous = heading = 0.0
+    warnings = []
     for index, (left, right) in enumerate(zip(path, path[1:])):
         rests = index + 2 < len(path) and path[index + 2]["azimuth"] == right["azimuth"]
-        camera.append(f"[{rows[index][1]:.6f}s–{rows[index + 1][1]:.6f}s] {_segment(left, right, previous, heading, rests)}")
+        duration = rows[index + 1][1] - rows[index][1]
+        segment = _segment(left, right, previous, heading, rests, duration)
+        hold = _is_hold(left, right)
+        if not hold and index + 2 < len(path) and _is_hold(right, path[index + 2]):
+            segment += " Reach this pose and stop completely before the hold begins."
+        segment += _anchored_segment(left, right, frames, anchors, rate)
+        camera.append(f"[{rows[index][1]:.6f}s–{rows[index + 1][1]:.6f}s] {segment}")
+        # This is practical test advice, not an H3 minimum or a timing rewrite.
+        if hold and duration < 0.5 - 1e-9:
+            warnings.append(f"Hold between keyframes {index + 1} and {index + 2} is only {duration:.3f}s "
+                            f"({duration * rate:.3g} frame intervals). H3 may smooth over this pause; "
+                            "try 0.5–1s for a visible stop. Its timing has been preserved.")
         previous = right["azimuth"] - left["azimuth"]
         heading = previous or heading
     if close_loop:
@@ -351,7 +421,16 @@ def compile_plan(path_json, *, prompt, frame_count, fps, frozen=False, close_loo
                "Camera motion and timing are prompt guidance, not exact 3D constraints.")
     if close_loop:
         summary += " Matching first/last images encourages a loop but does not guarantee a complete orbit."
+    if anchors:
+        linked = set(anchors) & {keyframe_frame(pose, frames) for pose in path}
+        summary += f" {len(linked)} camera keyframes have native image anchors. Images condition the view but do not impose exact camera geometry."
+        checkpoints = len(anchors) - len(linked)
+        if checkpoints:
+            summary += f" {checkpoints} timed image checkpoints guide the motion between camera keyframes without adding stops."
+    if warnings:
+        summary += " " + " ".join(warnings)
     return {"prompt": "\n".join(parts), "frame_count": frames, "fps": rate,
             "duration_seconds": frames / rate, "end_seconds": end_seconds,
             "close_loop": close_loop, "summary": summary, "rows": rows,
-            "multi_prompts_gen_type": "FG", "path": path}
+            "multi_prompts_gen_type": "FG", "path": path, "warnings": warnings,
+            "stabilize_roll": stabilize_roll, "image_anchors": list(image_anchors or ())}

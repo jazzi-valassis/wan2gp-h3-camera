@@ -14,6 +14,7 @@
     const signed = value => (value > 0 ? "+" : "") + fmt(value);
     // Orbit angles are absolute; a segment's turn is its change from the previous keyframe.
     const turnOf = index => index ? points[index].azimuth - points[index - 1].azimuth : 0;
+    const isHold = index => index > 0 && ["azimuth", "elevation", "distance"].every(key => points[index][key] === points[index - 1][key]);
     const validPoint = p => p && ["time", "azimuth", "elevation", "distance"].every(k => typeof p[k] === "number" && Number.isFinite(p[k]));
 
     function parsePath(value) {
@@ -122,6 +123,12 @@
             <text class="diagram-label" x="15" y="23">${fmt(at(position).azimuth)}° orbit from start · ${fmt(at(position).elevation)}° elevation · ${fmt(at(position).distance)}×</text>`;
     }
     function segmentHelp(index) {
+        if (isHold(index)) {
+            const duration = points[index].time - points[index - 1].time;
+            const short = timingKnown && duration * seconds < .5 - 1e-9;
+            return `Camera hold for ${timeLabel(duration)}: position and viewing direction stay fixed.`
+                + (short ? " This pause may be smoothed over; try 0.5–1 s for a visible stop." : "");
+        }
         const turn = turnOf(index);
         const prior = index > 1 ? turnOf(index - 1) : 0;
         const heading = points.slice(1, index).map((_, i) => turnOf(i + 1)).filter(Boolean).at(-1) || 0;
@@ -144,12 +151,13 @@
         $("distance-range").disabled = invalid || fixed;
         $("keyframe-help").textContent = fixed ? "The start view is fixed. Select another keyframe to move the camera." : segmentHelp(selected);
         $("add").disabled = invalid || points.length >= 24;
+        $("hold").disabled = invalid || !timingKnown || points.length >= 24 || selected === points.length - 1;
         $("remove").disabled = invalid || fixed || points.length <= 2;
         $("play").disabled = invalid;
         $("scrub").disabled = invalid;
         $("frame-count").textContent = `${points.length} / 24 keyframes`;
         const focusedFrame = document.activeElement?.dataset.keyframe;
-        $("keyframes").innerHTML = points.map((point, i) => `<button type="button" class="keyframe" data-keyframe="${i}" aria-pressed="${i === selected}" aria-label="Select keyframe ${i+1} at ${timeLabel(point.time)}, orbit angle ${fmt(point.azimuth)} degrees${i ? `, turn ${signed(turnOf(i))} degrees` : ""}"${invalid ? " disabled" : ""}>${i === 0 ? "Start" : `Keyframe ${i + 1}`}<span>${timeLabel(point.time)} · ${fmt(point.azimuth)}°${i ? ` (${signed(turnOf(i))})` : ""}</span></button>`).join("");
+        $("keyframes").innerHTML = points.map((point, i) => `<button type="button" class="keyframe" data-keyframe="${i}" aria-pressed="${i === selected}" aria-label="Select keyframe ${i+1} at ${timeLabel(point.time)}, orbit angle ${fmt(point.azimuth)} degrees${i ? `, turn ${signed(turnOf(i))} degrees` : ""}${isHold(i) ? ", hold ends" : ""}"${invalid ? " disabled" : ""}>${i === 0 ? "Start" : `Keyframe ${i + 1}${isHold(i) ? " · Hold" : ""}`}<span>${timeLabel(point.time)} · ${fmt(point.azimuth)}°${i ? ` (${signed(turnOf(i))})` : ""}</span></button>`).join("");
         if (focusedFrame !== undefined) $("keyframes").querySelector(`[data-keyframe="${focusedFrame}"]`)?.focus({preventScroll:true});
         updatePosition();
         resize();
@@ -211,6 +219,17 @@
         const time = round((points[insert - 1].time + points[insert].time) / 2);
         points.splice(insert, 0, at(time));
         selected = insert;
+        edited();
+    });
+    $("hold").addEventListener("click", () => {
+        if (invalid || !timingKnown || points.length >= 24 || selected === points.length - 1) return;
+        const time = points[selected].time + .5 / seconds;
+        if (time >= points[selected + 1].time) {
+            showError("A 0.5s hold needs room before the next keyframe. Move that keyframe later or edit the path times first.");
+            return;
+        }
+        points.splice(selected + 1, 0, {...points[selected], time});
+        selected++;
         edited();
     });
     $("remove").addEventListener("click", () => {

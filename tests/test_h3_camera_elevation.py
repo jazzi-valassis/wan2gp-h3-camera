@@ -118,7 +118,7 @@ class ElevationCompilerTests(unittest.TestCase):
         self.assertRegex(lens.lower(), r"(?:lens.*up|up.*lens)")
         self.assertNotRegex(segment.lower(), r"overhead|directly above")
 
-    def test_non_elevation_orbit_push_pull_and_hold_prompts_remain_byte_identical(self):
+    def test_linear_orbit_push_pull_prompts_remain_byte_identical_with_roll_option_off(self):
         cases = {
             "orbit": ([camera.ORIGIN, {"time": 1, "azimuth": 90, "elevation": 0, "distance": 1}],
                       "68ec9c8b34aef0fb302c15177a99b1129f236bec08fb1a363ac04be98cb4d989"),
@@ -126,14 +126,12 @@ class ElevationCompilerTests(unittest.TestCase):
                      "0ccc884892dde93243c3f6f47cb9d24da123054aa20462761444905fd79a9ec5"),
             "pull": ([camera.ORIGIN, {"time": 1, "azimuth": 0, "elevation": 0, "distance": 1.5}],
                      "4521275d77b0efdca0b933bf3aa260dabb37e65b4f8cb3c4454cc44ff39446b5"),
-            "hold": ([camera.ORIGIN, {"time": 1, "azimuth": 0, "elevation": 0, "distance": 1}],
-                     "5bb342e5b10adedd77817186af9cd6650fb53d48185e20c34453ff2a08a1d87a"),
         }
         for name, (path, expected) in cases.items():
             with self.subTest(name=name):
                 result = camera.compile_plan(
                     json.dumps(path), prompt="A geometric sculpture remains centered.",
-                    frame_count=124, fps=24, interpolation="linear",
+                    frame_count=124, fps=24, interpolation="linear", stabilize_roll=False,
                 )
                 actual = hashlib.sha256(result["prompt"].encode("utf-8")).hexdigest()
                 self.assertEqual(actual, expected)

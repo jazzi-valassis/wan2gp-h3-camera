@@ -23,7 +23,7 @@ def make_plugin():
     plugin = camera.H3CameraPlugin()
     plugin.setup_ui()
     definition = {"frames_minimum": 107, "frames_steps": 17, "frames_offset": 5,
-                  "image_prompt_types_allowed": "TSEVL", "reference_image_enabled": True,
+                  "image_prompt_types_allowed": "TSEVL", "reference_image_enabled": True, "custom_frames_injection": True,
                   "sliding_window_defaults": {"window_min": 124, "window_max": 481}}
     plugin.get_model_def = lambda model: dict(definition, audio_only=model == "tts")
     plugin.get_model_family = lambda model: "minimax_h3" if model != "wan" else "wan"
@@ -177,13 +177,13 @@ class NativeCameraTests(unittest.TestCase):
         try:
             loaded = self.plugin.load_plan(saved)
             self.assertEqual(json.loads(loaded[0]), json.loads(camera.DEFAULT_PATH))
-            self.assertEqual(loaded[1:], ("frozen", "linear", False))
+            self.assertEqual(loaded[1:], ("frozen", "linear", False, True))
         finally:
             Path(saved).unlink()
         with tempfile.TemporaryDirectory() as directory:
             file = Path(directory) / "plan.json"
             file.write_text(camera.DEFAULT_PATH, encoding="utf-8")
-            self.assertEqual(self.plugin.load_plan(file)[1:], ("animated", "smooth", False))
+            self.assertEqual(self.plugin.load_plan(file)[1:], ("animated", "smooth", False, True))
             file.write_text("[]", encoding="utf-8")
             with self.assertRaises(gr.Error):
                 self.plugin.load_plan(file)
@@ -194,6 +194,39 @@ class NativeCameraTests(unittest.TestCase):
         self.assertTrue(shown["visible"])
         self.assertFalse(hidden["visible"])
         self.assertEqual(timing, "{}")
+
+    def test_roll_option_survives_export_and_reaches_preview_and_apply(self):
+        saved = self.plugin.save_plan(camera.DEFAULT_PATH, "animated", "smooth", False, False)
+        try:
+            loaded = self.plugin.load_plan(saved)
+            self.assertFalse(loaded[-1])
+            args = arguments() + [loaded[-1]]
+            self.assertNotIn("Stabilize camera roll", self.plugin.preview(*args)[1])
+            self.assertNotIn("Stabilize camera roll", self.plugin.apply_plan(*args)[0]["value"])
+            args[-1] = True
+            self.assertIn("Stabilize camera roll", self.plugin.preview(*args)[1])
+            self.assertIn("Stabilize camera roll", self.plugin.apply_plan(*args)[0]["value"])
+        finally:
+            Path(saved).unlink()
+
+    def test_legacy_plan_defaults_to_stabilized_roll_and_invalid_option_is_rejected(self):
+        payload = {"format": camera.PLAN_FORMAT, "keyframes": json.loads(camera.DEFAULT_PATH)}
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "plan.json"
+            file.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertTrue(self.plugin.load_plan(file)[-1])
+            payload["stabilize_roll"] = "false"
+            file.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(gr.Error):
+                self.plugin.load_plan(file)
+        self.assertEqual(self.plugin.load_plan(None), (gr.update(),) * 5)
+
+    def test_preview_timing_matches_applied_frame_alignment_for_hold_duration(self):
+        for requested in (20, 225, 239, 243):
+            timing = json.loads(self.plugin.timing_value(requested, "24", None, None, "h3"))
+            applied = self.plugin._compile(*arguments(video_length=requested))
+            self.assertEqual(timing["frame_count"], applied["frame_count"])
+            self.assertEqual(timing["seconds"], applied["end_seconds"])
 
     def test_export_replacement_cleans_only_the_current_sessions_previous_file(self):
         first = self.plugin.save_plan(camera.DEFAULT_PATH, "animated", "smooth", False)
