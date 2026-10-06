@@ -1,7 +1,7 @@
 {
     "name": "H3 Camera",
     "author": "Jazzi",
-    "version": "0.2.9",
+    "version": "0.3.0",
     "description": "Plan H3 camera moves, extract image checkpoints, and align a generated hold to the planned frame boundaries.",
     "type": ["extension"],
     "wan2gp_version": "17.01",

@@ -70,7 +70,7 @@ class CameraNativeRoundtripTests(unittest.TestCase):
                 self.assertTrue(plugin._supports_camera(model))
                 result = plugin._compile(*native_arguments(model, "One continuous scene.", 226))
                 self.assertEqual(result["frame_count"], 226)
-                self.assertIn("Orbit 360 degrees", result["prompt"])
+                self.assertIn("orbits one full turn (360 degrees)", result["prompt"])
 
     def test_real_model_defaults_survive_native_queue_prompt_processing(self):
         # Run the same template/split/serialize operations used by wgp's queue

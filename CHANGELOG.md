@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 - 2026-10-06
+
+- Fix spinning renders: a 90-degree orbit with a 48-degree rise produced a full orbit, a top-down view and a spin. The compiled plan no longer lists motions to avoid (orbit, roll, twisting, rotation, banking), mentions full turns, or names an overhead view unless the path reaches 75 degrees. A 48-degree view is no longer described as "above the subject".
+- Describe each move as a turn fraction with its angle, a named endpoint view and camera height, and a speed word derived from the segment's rate. A new whole-take line states the total orbit and highest viewpoint.
+- Smooth easing no longer asks the camera to stop at every keyframe. Extra intermediate keyframes now continue one arc instead of adding stops. Only timed holds pause.
+- The first orbit segment no longer says "continuing". Stopped orbits rise or lower "straight up/down" on the current view, and dolly-only segments state their distances once.
+- Six new regressions cover the reported path, one-keyframe-per-second paths, overhead wording thresholds, reversal/multi-turn totals, view names and replacement of a comment-free 0.2.9 plan. Wording baselines were updated.
+- Five renders on the reported scene: 0.2.9 wording spun overhead at both seeds; 0.3.0 did not at either seed or with a keyframe every second. See VALIDATION.md. Saved plans are unchanged; press Apply again to get the new wording.
+
 ## 0.2.9 - 2026-10-06
 
 - Added bounded automatic checking/correction of up to three existing candidate renders, stopping at the first passing output.

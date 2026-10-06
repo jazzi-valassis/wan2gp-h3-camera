@@ -239,103 +239,157 @@ def _anchored_segment(left, right, frames, anchors, fps):
     return text
 
 
-def _rest(right):
-    """Anchor where an orbit ends when the next segment holds that angle; H3 tends to overshoot."""
-    turns = {90: "a quarter turn", 180: "a half turn", 270: "three quarters of a turn", 360: "one full turn"}
-    amount = abs(right["azimuth"])
-    where = turns.get(amount, f"{amount:g} degrees")
-    return f" and come to rest {where} from the starting view, without orbiting past azimuth {right['azimuth']:g} degrees"
+TURNS = {45: "an eighth of a turn", 90: "a quarter turn", 135: "three eighths of a turn", 180: "a half turn",
+         270: "three quarters of a turn", 360: "one full turn", 540: "one and a half turns", 720: "two full turns"}
 
 
-def _elevation_segment(left, right, previous=0.0, heading=0.0, rests=False):
-    da = right["azimuth"] - left["azimuth"]
-    de = right["elevation"] - left["elevation"]
+def _turn(degrees):
+    """Orbit size in words and degrees; H3 follows turn fractions and view names better than coordinates."""
+    amount = round(abs(degrees), 6)
+    return f"{TURNS[amount]} ({amount:g} degrees)" if amount in TURNS else f"{amount:g} degrees"
+
+
+def _view(azimuth):
+    """Name the view at an absolute orbit angle from the start."""
+    angle = abs((azimuth + 180) % 360 - 180)
+    if angle < 10:
+        return "the starting side of the subject" + (" again" if abs(azimuth) >= 180 else "")
+    if angle < 30:
+        return "a slightly angled view of the subject"
+    if angle <= 60:
+        return "a three-quarter view of the subject"
+    if angle <= 120:
+        return "a side view of the subject"
+    if angle <= 160:
+        return "a rear three-quarter view of the subject"
+    return "the opposite side of the subject"
+
+
+def _angle(elevation):
+    """Name a viewing elevation the way shot descriptions do, keeping its value."""
+    if elevation >= 75:
+        return "a near-overhead view, almost directly above the subject"
+    if elevation >= 60:
+        return f"a steep high angle, looking down at about {elevation:g} degrees"
+    if elevation >= 25:
+        return f"a high angle, looking down at about {elevation:g} degrees"
+    if elevation > 5:
+        return f"a slightly raised angle, about {elevation:g} degrees above eye level"
+    if elevation > 0:
+        return f"just above eye level ({elevation:g} degrees)"
+    if elevation == 0:
+        return "eye level"
+    if elevation >= -5:
+        return f"just below eye level ({-elevation:g} degrees)"
+    if elevation > -25:
+        return f"a slightly low angle, about {-elevation:g} degrees below eye level"
+    return f"a low angle, looking up at about {-elevation:g} degrees"
+
+
+def _pace(left, right, duration):
+    """Speed adverb from the largest angular (or percent radial) change per second."""
+    if duration <= 0:
+        return ""
+    rate = max(abs(right["azimuth"] - left["azimuth"]), abs(right["elevation"] - left["elevation"]),
+               100 * abs(right["distance"] - left["distance"]) / left["distance"]) / duration
+    return "slowly " if rate < 15 else "steadily " if rate < 45 else "quickly "
+
+
+def _distance(left, right):
     dd = right["distance"] - left["distance"]
-    start_height = left["distance"] * math.sin(math.radians(left["elevation"]))
-    end_height = right["distance"] * math.sin(math.radians(right["elevation"]))
-    if math.isclose(start_height, end_height, rel_tol=0, abs_tol=1e-9):
-        movement = "moves along the arc to a position at the same height"
-    elif end_height > start_height:
-        movement = "cranes upward through a rising arc"
-    else:
-        movement = "descends through a falling arc"
-    side = "right" if da > 0 else "left"
-    span = f"(azimuth {left['azimuth']:g} to {right['azimuth']:g} degrees)"
-    if da and _reverses(da, heading):
-        text = (f"The camera {movement} around the main subject, reversing its orbit to travel "
-                f"{abs(da):g} degrees toward camera {side} {span}")
-    elif da:
-        text = f"The camera {movement} around the main subject, continuing {abs(da):g} degrees toward camera {side} {span}"
-    elif previous or heading:
-        # Azimuth is absolute, so an unchanged value means the orbit ends here.
-        # "Around the subject" invites a continued orbit, so state what stays fixed in the frame.
-        transition = "stops orbiting" if previous else "keeps its orbit stopped"
-        text = (f"The camera {transition} and {movement}, holding azimuth at {right['azimuth']:g} degrees. "
-                "It does not circle the subject or travel sideways in this segment; the camera stays "
-                "on the same azimuth side of the subject throughout this segment")
-    else:
-        text = (f"The camera {movement}, keeping azimuth at "
-                f"{right['azimuth']:g} degrees without orbiting sideways")
-    if da and rests:
-        text += _rest(right)
-    text += (f". Its viewing elevation changes from {left['elevation']:g} to {right['elevation']:g} degrees "
-             f"while the lens tilts {'downward' if de > 0 else 'upward'} to keep the subject framed.")
-    if right["elevation"] >= 75:
-        text += (" At the end of this segment, the camera is almost directly above the subject, "
-                 "looking steeply down in a near-overhead view. Top surfaces are visible and vertical features are foreshortened.")
-    elif right["elevation"] > 0:
-        text += " At the end of this segment, the view is elevated above the subject, looking down toward it."
-    elif right["elevation"] < 0:
-        text += " At the end of this segment, the view is below the subject, looking up toward it."
-    else:
-        text += " At the end of this segment, the view returns to the starting elevation."
-    if dd:
-        percent = abs(dd) / left["distance"] * 100
-        if percent <= 5 or math.isclose(percent, 5, rel_tol=0, abs_tol=1e-9):
-            text += (f" Camera-to-subject distance {'increases' if dd > 0 else 'decreases'} only slightly, "
-                     f"from {left['distance']:g}x to {right['distance']:g}x the starting distance (about {percent:.2g}%).")
-        else:
-            text += (f" Dolly {'back' if dd > 0 else 'in'} from {left['distance']:g}x to "
-                     f"{right['distance']:g}x the starting distance (about {percent:.3g}%).")
-    else:
-        text += f" Maintain distance {right['distance']:g}x the starting distance."
-    return text + " Keep the focal length fixed throughout this move."
+    percent = abs(dd) / left["distance"] * 100
+    if percent <= 5 or math.isclose(percent, 5, rel_tol=0, abs_tol=1e-9):
+        return (f" Camera-to-subject distance {'increases' if dd > 0 else 'decreases'} only slightly, "
+                f"from {left['distance']:g}x to {right['distance']:g}x the starting distance (about {percent:.2g}%).")
+    return (f" Dolly {'back' if dd > 0 else 'in'} from {left['distance']:g}x to "
+            f"{right['distance']:g}x the starting distance (about {percent:.3g}%).")
 
 
 def _segment(left, right, previous=0.0, heading=0.0, rests=False, duration=0.0):
     """Describe one segment; ``previous`` is the prior segment's azimuth change,
     ``heading`` the latest nonzero one, and ``rests`` whether the next segment
-    keeps this endpoint's azimuth, so stops and reversals read as such."""
+    keeps this endpoint's azimuth, so stops and reversals read as such.
+
+    Name only the requested motion. Lists of forbidden moves ("no orbit, roll,
+    twisting", "without orbiting past") put those moves in H3's prompt, and a
+    48-degree rise described as "above the subject" rendered as a spinning
+    top-down shot. Turn fractions and view names bound each move instead."""
     da = right["azimuth"] - left["azimuth"]
     de = right["elevation"] - left["elevation"]
     dd = right["distance"] - left["distance"]
-    if de:
-        return _elevation_segment(left, right, previous, heading, rests)
-    changes = []
+    view = _view(right["azimuth"])
+    if not (da or de or dd):
+        return (f"Hold the camera completely stationary for {duration:.6f} seconds on {view}, at "
+                f"{_angle(right['elevation'])}, at {right['distance']:g}x the starting distance. Lock the camera "
+                "position, viewing direction and focal length for the entire interval; subject motion still "
+                "follows the scene instructions.")
+    pace = _pace(left, right, duration)
+    # Physical height decides rise/descent; elevation alone can reverse when the radius changes.
+    start_height = left["distance"] * math.sin(math.radians(left["elevation"]))
+    end_height = right["distance"] * math.sin(math.radians(right["elevation"]))
+    level = math.isclose(start_height, end_height, rel_tol=0, abs_tol=1e-9)
     if da:
-        changes.append(f"{'reverse direction and orbit' if _reverses(da, heading) else 'orbit'} "
-                       f"{abs(da):g} degrees toward camera {'right' if da > 0 else 'left'} "
-                       f"(azimuth {left['azimuth']:g} to {right['azimuth']:g} degrees)"
-                       + (_rest(right) if rests else ""))
-    if dd:
-        changes.append(f"{'dolly back' if dd > 0 else 'dolly in'} from {left['distance']:g}x to {right['distance']:g}x the starting distance")
-    if not changes:
-        return (f"Hold the camera completely stationary for {duration:.6f} seconds at azimuth "
-                f"{right['azimuth']:g} degrees, elevation {right['elevation']:g} degrees and distance "
-                f"{right['distance']:g}x the starting distance. Lock camera position, viewing direction "
-                "and focal length: no orbit, crane, dolly, pan, tilt or roll during this interval. "
-                "Stay stationary for the entire interval; subject motion still follows the scene instructions.")
-    unchanged = []
-    unchanged.append(f"elevation {right['elevation']:g} degrees")
-    if not dd:
-        unchanged.append(f"distance {right['distance']:g}x")
-    text = "; simultaneously ".join(changes)
-    if not da and (previous or heading):
-        transition = "stop orbiting" if previous else "keep the orbit stopped"
-        text = f"{transition} and hold azimuth at {right['azimuth']:g} degrees; {text}"
-    if unchanged:
-        text += "; maintain " + " and ".join(unchanged)
-    return text[0].upper() + text[1:] + "."
+        side = "right" if da > 0 else "left"
+        verb, noun = ("orbits", "orbit") if abs(da) >= 180 else ("arcs", "arc")
+        if _reverses(da, heading):
+            move = f"reverses direction and {verb} {_turn(da)} back to the {side} around the subject"
+        elif heading:
+            move = f"continues its {noun} around the subject to the {side}, adding {_turn(da)}"
+        else:
+            move = f"{verb} {_turn(da)} to the {side} around the subject"
+        if de:
+            move += " while keeping the same height" if level else " while rising" if end_height > start_height else " while descending"
+        text = f"The camera {pace}{move}."
+    else:
+        if de:
+            move = ("shifts its viewing angle at the same height" if level else
+                    "rises straight up" if end_height > start_height else "lowers straight down")
+        else:
+            percent = abs(dd) / left["distance"] * 100
+            move = (f"dollies {'back' if dd > 0 else 'in'} from {left['distance']:g}x to "
+                    f"{right['distance']:g}x the starting distance (about {percent:.3g}%)")
+        if previous:
+            text = f"The camera stops arcing and {pace}{move}, staying on {view}."
+        elif heading:
+            text = f"The camera {pace}{move}, staying on {view}."
+        else:
+            text = f"The camera {pace}{move}."
+    if de:
+        text += f" The lens tilts {'downward' if de > 0 else 'upward'} to keep the subject framed."
+    if dd and (da or de):
+        text += _distance(left, right)
+    elif not dd:
+        text += " Keep the same distance from the subject."
+    if de or dd:
+        text += " Keep the focal length fixed throughout this move."
+    if right["elevation"] >= 75:
+        text += (" At the end of this segment, the camera is almost directly above the subject, looking steeply "
+                 "down in a near-overhead view. Top surfaces are visible and vertical features are foreshortened.")
+    else:
+        text += f" It {'settles' if rests else 'ends'} at {_angle(right['elevation'])}, on {view}."
+    return text
+
+
+def _journey(path):
+    """Bound the whole take; H3 overshoots orbits and heights that are only given per segment."""
+    turns = [right["azimuth"] - left["azimuth"] for left, right in zip(path, path[1:])
+             if right["azimuth"] != left["azimuth"]]
+    end = _view(path[-1]["azimuth"])
+    if not turns:
+        text = "The camera stays on the starting side of the subject for the whole take."
+    elif all((turn > 0) == (turns[0] > 0) for turn in turns):
+        total = path[-1]["azimuth"]
+        text = (f"In total the camera {'orbits' if abs(total) >= 180 else 'arcs'} {_turn(total)} to the "
+                f"{'right' if total > 0 else 'left'} around the subject, ending on {end}.")
+    else:
+        text = f"In total the camera travels {sum(abs(turn) for turn in turns):g} degrees around the subject, ending on {end}."
+    highest = max(pose["elevation"] for pose in path)
+    lowest = min(pose["elevation"] for pose in path)
+    if highest > 0:
+        text += f" Its highest viewpoint is {_angle(highest)}."
+    if lowest < 0:
+        text += f" Its lowest viewpoint is {_angle(lowest)}."
+    return text if highest or lowest else text + " It stays at eye level."
 
 
 def compile_plan(path_json, *, prompt, frame_count, fps, frozen=False, close_loop=False,
@@ -374,17 +428,17 @@ def compile_plan(path_json, *, prompt, frame_count, fps, frozen=False, close_loo
     travel = sum(abs(right["azimuth"] - left["azimuth"]) for left, right in zip(path, path[1:]))
     camera = [
         f"Camera plan: one continuous take, {frames} frames at {rate:g} fps; last frame at {end_seconds:.6f}s. No cuts.",
-        "Camera coordinates are relative to the starting view, looking toward the main subject: azimuth 0 degrees, elevation 0 degrees, distance 1x. "
-        "Positive azimuth means the camera travels to its right around the subject; angles stay unwrapped across full turns. "
-        "Move the camera through the scene with natural parallax while keeping the subject framed."
-        + (" Stabilize camera roll throughout the take: keep the camera upright relative to world up, "
-           "with no banking, Dutch angle or rotation around the lens axis. Use pan and tilt for framing "
-           "corrections without adding roll. As the view approaches overhead, preserve the screen orientation without twisting."
+        "Camera coordinates are relative to the starting view, looking toward the main subject at eye level; "
+        "angles and distances below are measured from it. Move the camera through the scene with natural parallax "
+        "while keeping the subject framed. " + _journey(path)
+        + (" Keep the horizon level and the camera upright throughout the take, using pan and tilt for framing."
+           + (" Near the overhead view, keep the picture's orientation steady."
+              if max(pose["elevation"] for pose in path) >= 75 else "")
            if stabilize_roll else ""),
         ("Frozen scene: keep subjects, expressions, objects, water, smoke and background motion still; only the camera moves. Preserve the requested soundtrack."
          if frozen else "Allow the subject and environment to move naturally according to the scene description, with requested speech and action synchronized to the audio."),
-        ("Ease smoothly into and out of each segment; reach each keyframe and stop before starting the next segment. "
-         "Smooth the speed within each segment, without rounding off path corners or blending adjacent moves. "
+        ("Ease smoothly into and out of each segment; follow each segment's move as described, changing direction "
+         "at keyframes without rounding off path corners or blending adjacent moves. "
          "Pause only for explicitly timed hold intervals."
          if interpolation == "smooth" else "Use a constant rate within each segment, changing direction at its keyframes."),
     ]

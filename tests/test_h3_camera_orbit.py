@@ -27,59 +27,61 @@ def segments(*poses, prompt="A woman stands on a railway platform."):
 class OrbitDirectionTests(unittest.TestCase):
     def test_reported_orbit_then_overhead_crane_stops_orbiting(self):
         first, second = segments(pose(.5, 90), pose(1, 90, 89))
-        self.assertIn("Orbit 90 degrees toward camera right (azimuth 0 to 90 degrees) and come to rest "
-                      "a quarter turn from the starting view, without orbiting past azimuth 90 degrees", first)
-        self.assertIn("The camera stops orbiting and cranes upward", second)
-        self.assertIn("holding azimuth at 90 degrees", second)
-        self.assertIn("does not circle the subject or travel sideways", second)
-        self.assertIn("the camera stays on the same azimuth side of the subject", second)
-        self.assertNotRegex(second, r"continuing|toward camera (?:left|right)|around the main subject")
+        self.assertIn("arcs a quarter turn (90 degrees) to the right around the subject", first)
+        self.assertIn("It settles at eye level, on a side view of the subject.", first)
+        self.assertIn("The camera stops arcing and", second)
+        self.assertIn("rises straight up, staying on a side view of the subject", second)
+        self.assertNotRegex(second, r"continu|to the (?:left|right)|around the (?:main )?subject")
         self.assertIn("almost directly above the subject", second)
 
-    def test_rest_anchor_only_precedes_a_held_angle(self):
+    def test_rest_wording_only_precedes_a_held_angle(self):
         hold_first, _ = segments(pose(.5, -180), pose(1, -180))
-        self.assertIn("come to rest a half turn from the starting view, without orbiting past azimuth -180 degrees", hold_first)
+        self.assertIn("orbits a half turn (180 degrees) to the left around the subject", hold_first)
+        self.assertIn("It settles at eye level, on the opposite side of the subject.", hold_first)
         odd_first, _ = segments(pose(.5, 45, 10), pose(1, 45, 30))
-        self.assertIn("come to rest 45 degrees from the starting view", odd_first)
+        self.assertIn("It settles at a slightly raised angle", odd_first)
+        self.assertIn("on a three-quarter view of the subject", odd_first)
         for first in (segments(pose(.5, 90), pose(1, 180))[0], segments(pose(.5, 90), pose(1, 0))[0],
                       segments(pose(1, 90))[0]):
-            self.assertNotIn("come to rest", first)
+            self.assertNotIn("settles", first)
 
     def test_returning_to_start_angle_is_a_reversal_not_a_continuation(self):
         second = segments(pose(.5, 90), pose(1, 0, 89))[1]
-        self.assertIn("reversing its orbit to travel 90 degrees toward camera left (azimuth 90 to 0 degrees)", second)
-        self.assertNotIn("continuing", second)
+        self.assertIn("reverses direction and arcs a quarter turn (90 degrees) back to the left around the subject", second)
+        self.assertNotIn("continu", second)
 
     def test_same_direction_elevation_orbit_still_continues(self):
-        second = segments(pose(.5, 45), pose(1, 90, 40))[1]
-        self.assertIn("continuing 45 degrees toward camera right", second)
+        first, second = segments(pose(.5, 45), pose(1, 90, 40))
+        self.assertNotIn("continu", first)
+        self.assertIn("continues its arc around the subject to the right, adding an eighth of a turn (45 degrees)", second)
         self.assertNotIn("revers", second)
 
     def test_level_reversal_and_hold_before_reversal(self):
         self.assertTrue(segments(pose(.5, 90), pose(1, -30))[1].startswith(
-            "[2.562500s–5.125000s] Reverse direction and orbit 120 degrees toward camera left (azimuth 90 to -30 degrees)"))
+            "[2.562500s–5.125000s] The camera quickly reverses direction and arcs 120 degrees back to the left around the subject."))
         first, hold, back = segments(pose(.3, -90), pose(.6, -90), pose(1, 0))
-        self.assertIn("toward camera left", first)
+        self.assertIn("to the left", first)
         self.assertIn("Hold the camera completely stationary", hold)
-        self.assertIn("Reverse direction and orbit 90 degrees toward camera right", back)
+        self.assertIn("reverses direction and arcs a quarter turn (90 degrees) back to the right", back)
 
     def test_dolly_after_orbit_states_that_the_orbit_stops(self):
         second = segments(pose(.5, 90), pose(1, 90, distance=.65))[1]
-        self.assertIn("Stop orbiting and hold azimuth at 90 degrees; dolly in from 1x to 0.65x", second)
+        self.assertIn("The camera stops arcing and slowly dollies in from 1x to 0.65x the starting distance "
+                      "(about 35%), staying on a side view of the subject.", second)
 
-    def test_rise_without_orbit_says_no_sideways_orbit(self):
+    def test_rise_without_orbit_names_only_the_rise(self):
         only = segments(pose(1, 0, 20))[0]
-        self.assertIn("keeping azimuth at 0 degrees without orbiting sideways", only)
-        self.assertNotIn("stops orbiting", only)
+        self.assertIn("The camera slowly rises straight up.", only)
+        self.assertNotRegex(only, r"orbit|arc|stops")
 
-    def test_render_validated_023_linear_path_is_byte_identical_with_roll_option_off(self):
+    def test_render_validated_023_linear_path_matches_030_baseline_with_roll_option_off(self):
         scene = (Path(__file__).with_name("test_h3_camera_elevation.py").read_text(encoding="utf-8")
                  .split('SCENE_PROMPT = """')[1].split('"""')[0])
         path = json.dumps([camera.ORIGIN, pose(.5, 67.5226, 15.0955, 1.025), pose(1, 92.2188, 81)])
         result = camera.compile_plan(path, prompt=scene, frame_count=124, fps=24,
                                      reference_mode=True, interpolation="linear", stabilize_roll=False)
         self.assertEqual(hashlib.sha256(result["prompt"].encode("utf-8")).hexdigest(),
-                         "76ada2bdf073d3940b0d80876e5526039dd05d73d38b8b60da4d1dd99e898943")
+                         "9d6d8f5d2444b9f1e8389a5e5f96176cd3508df48d575e56b96f0fcd4c459b9f")
 
     def test_new_wording_reapplies_without_duplicates(self):
         path = json.dumps([camera.ORIGIN, pose(.5, 90), pose(1, 0, 89)])

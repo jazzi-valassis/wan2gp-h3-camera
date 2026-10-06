@@ -201,11 +201,11 @@ class NativeCameraTests(unittest.TestCase):
             loaded = self.plugin.load_plan(saved)
             self.assertFalse(loaded[-1])
             args = arguments() + [loaded[-1]]
-            self.assertNotIn("Stabilize camera roll", self.plugin.preview(*args)[1])
-            self.assertNotIn("Stabilize camera roll", self.plugin.apply_plan(*args)[0]["value"])
+            self.assertNotIn("Keep the horizon level", self.plugin.preview(*args)[1])
+            self.assertNotIn("Keep the horizon level", self.plugin.apply_plan(*args)[0]["value"])
             args[-1] = True
-            self.assertIn("Stabilize camera roll", self.plugin.preview(*args)[1])
-            self.assertIn("Stabilize camera roll", self.plugin.apply_plan(*args)[0]["value"])
+            self.assertIn("Keep the horizon level", self.plugin.preview(*args)[1])
+            self.assertIn("Keep the horizon level", self.plugin.apply_plan(*args)[0]["value"])
         finally:
             Path(saved).unlink()
 

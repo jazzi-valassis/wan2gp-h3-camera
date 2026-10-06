@@ -4,7 +4,7 @@ A visual single-shot camera planner for MiniMax H3 in [WanGP / Wan2GP](https://g
 
 **Author and maintainer:** [Jazzi](https://github.com/jazzi-valassis)
 
-**Version:** 0.2.9 · **License:** [MIT](LICENSE) · **Plugin type:** extension
+**Version:** 0.3.0 · **License:** [MIT](LICENSE) · **Plugin type:** extension
 
 The plugin adds no model downloads or GPU allocations. Camera movement is prompt guidance: the diagram does not impose an exact 3D trajectory on the model. Optional timing tools use FFmpeg/FFprobe on PATH and WanGP's existing OpenCV, NumPy and Pillow packages.
 
@@ -51,7 +51,7 @@ Enable **H3 Camera**, save settings, and restart WanGP as above.
 
 ### Install from a ZIP
 
-Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.2.9.zip`, run `python scripts/build_release.py`. Use the Git installation method for the latest source version; downloadable releases may lag behind main.
+Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.3.0.zip`, run `python scripts/build_release.py`. Use the Git installation method for the latest source version; downloadable releases may lag behind main.
 
 The final layout must be:
 
@@ -87,7 +87,7 @@ The repository root contains the plugin files directly, so the public URL can be
 
 ## Compatibility
 
-Version **0.2.9** is tested with the installed **WanGP v17.01**, host HEAD `0e58385fbde7ff102d276e4a9e490845de76b4ea` with existing local host edits, and **Gradio 5.29.0**. Image anchoring needs the native `shared.prompt_enhancer.images.window_contexts` and `resolve_injected_positions` helpers and an H3 Ref2VA model supporting Inject Frames. If those helpers are absent, the image-anchor buttons are disabled; ordinary prompt planning remains available when the other requested host APIs exist. Timing correction needs FFmpeg/FFprobe on PATH. Older releases are not certified for the new image workflow. See [VALIDATION.md](VALIDATION.md) for the exact local checks.
+Version **0.3.0** is tested with the installed **WanGP v17.01**, host HEAD `0e58385fbde7ff102d276e4a9e490845de76b4ea` with existing local host edits, and **Gradio 5.29.0**. Image anchoring needs the native `shared.prompt_enhancer.images.window_contexts` and `resolve_injected_positions` helpers and an H3 Ref2VA model supporting Inject Frames. If those helpers are absent, the image-anchor buttons are disabled; ordinary prompt planning remains available when the other requested host APIs exist. Timing correction needs FFmpeg/FFprobe on PATH. Older releases are not certified for the new image workflow. See [VALIDATION.md](VALIDATION.md) for the exact local checks.
 
 The plugin uses `WAN2GPPlugin`, component/global requests, `insert_after`, and `add_custom_js`, plus the installed frame scheduler, prompt parser and native image-label helper. These are WanGP dependencies, not additional files to ship. It does not patch the pipeline, launch another server, submit its own generation jobs, or import `h3cam_ref` or MiniMaxH3Mod.
 
@@ -173,15 +173,21 @@ Applying again at the same frame replaces that checkpoint image without adding a
 
 A hold uses two identical camera poses at different times. Select a pose before the last keyframe and click **Add 0.5s hold** to duplicate it half a second later. Edit the new keyframe's time to adjust the pause. Existing keyframe times stay fixed, so the following move gets less time. If there is not enough room before the next keyframe, the editor asks you to adjust the timing first. Timing uses the same native frame alignment as Apply.
 
-The prompt describes a hold as a stationary camera with fixed position, viewing direction and focal length, for its full duration. Subject and environment movement still follow the selected scene-motion setting. Smooth easing requests smooth acceleration/deceleration within each segment, reaching and stopping at its endpoint before the next move. It does not request rounded path corners or invent a pause between segments.
+The prompt describes a hold as a stationary camera with fixed position, viewing direction and focal length, for its full duration. Subject and environment movement still follow the selected scene-motion setting. Smooth easing requests smooth acceleration/deceleration and a change of direction at each keyframe without rounding path corners. It does not ask the camera to stop at keyframes, so extra intermediate keyframes do not turn a move into a series of stops. Only timed holds pause the camera.
 
 Holds shorter than 0.5 seconds show advice in the editor and Preview/Apply summary. This is a suggested starting point for a visible-stop test, not a measured H3 minimum. For example, the reported 50%–51% hold at 243 frames and 24 fps lasts about 0.101 seconds (2.42 frame intervals). In the local one-seed comparison, extending that hold to 0.5 or 1 second did not produce a reliable stop; see [VALIDATION.md](VALIDATION.md). All entered times are preserved; the plugin does not lengthen holds automatically.
 
-**Stabilize camera roll** requests an upright camera relative to world up, with pan/tilt tracking and no banking or twisting near overhead. Keeping a subject framed does not, by itself, specify lens-axis roll. This checkbox adds prompt guidance; it is not a geometric camera lock. Turn it off if the scene deliberately calls for roll, and press Apply again after changing it.
+**Stabilize camera roll** asks for a level horizon and an upright camera, using pan and tilt for framing. Paths reaching 75 degrees or higher also ask for a steady picture orientation near overhead. This checkbox adds prompt guidance; it is not a geometric camera lock. Turn it off if the scene deliberately calls for roll, and press Apply again after changing it.
+
+### How moves are worded
+
+Since 0.3.0, the prompt names only the motion you planned. Earlier versions also listed motions to avoid: "no orbit, crane, dolly, pan, tilt or roll", "without orbiting past", "twisting" and "rotation around the lens axis". They also mentioned full turns and overhead views on every path. H3 tended to perform the moves it read about. A 90-degree orbit with a 48-degree rise rendered as a full orbit, a top-down view and a spin.
+
+Each move is now described as a turn fraction with its angle, such as "an eighth of a turn (45 degrees)". Its endpoint is named as a view (three-quarter, side or opposite side) and a camera height (eye level, high angle, near overhead). A whole-take line states the total orbit and the highest viewpoint, which bounds how far the camera should travel. Speed words (slowly, steadily, quickly) follow each segment's angular rate. These are wording choices that improved the tested renders; they do not impose exact camera geometry.
 
 ### Elevation moves
 
-When elevation changes, the compiled segment separates movement of the camera from rotation of its lens and describes the endpoint view. High endpoints at 75 degrees or above receive near-overhead wording. Small distance changes of up to 5% within an elevation segment are described as slight percentage adjustments, retaining both distances. Larger distance changes remain explicit dolly instructions. These thresholds select wording; they are not model controls. Elevation at a fixed azimuth avoids wording that invites circling the subject, including after a hold.
+When elevation changes, the compiled segment separates movement of the camera from rotation of its lens and describes the endpoint view. High endpoints at 75 degrees or above receive near-overhead wording. Small distance changes of up to 5% within an elevation segment are described as slight percentage adjustments, retaining both distances. Larger distance changes remain explicit dolly instructions. These thresholds select wording; they are not model controls. Elevation at a fixed azimuth is described as rising or lowering straight up or down on the current view, including after a hold.
 
 The diagram uses spherical distance and elevation around the subject. A large distance change can make camera height fall even while its elevation angle increases. The compiler accounts for this when describing camera travel. It keeps all keyframe values and does not rewrite the scene's subject actions, dialogue, gaze, or audio.
 

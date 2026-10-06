@@ -1,5 +1,27 @@
 # H3 Camera validation
 
+## Local 0.3.0 spin fix - 2026-10-06
+
+Report: a "simple" path rendered as a spinning shot. The path was a 45-degree orbit right while rising to elevation 48 and dollying to 0.75x by 5.041667 s, a 0.5 s hold, then another 45 degrees right while descending to eye level at 0.5x by 10.083333 s. The supplied clip rose to a top-down view, spun about the vertical axis and finished on the front view. Adding a keyframe every second did not help.
+
+The 0.2.9 plan for this path named many moves that were not requested. These included full turns, overhead, twisting, rotation around the lens axis, banking, "no orbit, crane, dolly, pan, tilt or roll", "without orbiting past" and seven orbit/around-the-subject phrases. It described the 48-degree view as "above the subject", and its smooth easing asked the camera to stop at every keyframe. Version 0.3.0 names only the planned motion. Each segment gets a turn fraction with its angle, an endpoint view and camera height, and a speed word, and one line bounds the whole take's orbit and highest viewpoint.
+
+Five renders used the user's saved Singularity preset: MiniMax H3 Ref2VA Singularity v1.3 Pruned 20B, 12 steps, one phase, Euler, shift 6, INT8 ConvRot, First Block Cache 0.08 from 25%, prompt enhancer off. Each is 243 frames at 24 fps, 704 x 1280. Frame zero of the supplied clip served as Start Image and identity reference, with the same rooftop scene text. Only the compiled camera plan and seed differ.
+
+| Trial | Seed | Observed result |
+| --- | --- | --- |
+| 0.2.9 wording | 764485034 | Side view by 2.5 s, behind the subject by 5 s, top-down spin 5.5–8 s, back to the front view at the end (about 360 degrees) |
+| 0.3.0 wording | 764485034 | Three-quarter high angle at 5 s, visibly held to 5.5 s, side profile at the end; descent stops short of eye level |
+| 0.2.9 wording | 708144286 | Steep near-overhead by 5 s, spins while overhead, returns to the front view (about 360 degrees) |
+| 0.3.0 wording | 708144286 | High angle three-quarter view held through the hold, side profile near eye level and closer at the end |
+| 0.3.0, keyframe every second | 764485034 | One continuous arc to a high three-quarter view, then a side profile at eye level; no stops between keyframes |
+
+No 0.3.0 render reached overhead or spun. Viewpoints were judged visually from contact sheets and frames 0, 60, 121, 133, 180 and 242, not measured as camera coordinates. This is one scene and two seeds, so it does not establish reliability on other scenes. Exact angles, distances and timing are still not enforced.
+
+All 116 automated tests passed. Six new regressions in `test_h3_camera_spin.py` cover the reported path, one-keyframe-per-second paths, overhead wording thresholds, reversal and multi-turn totals, view names, and replacement of a comment-free 0.2.9 plan. Wording assertions and byte baselines in the orbit, elevation, motion, plan, plugin and round-trip tests were updated to the 0.3.0 wording; their structural checks are unchanged.
+
+Evidence is in `local_runtime/deepy_projects/h3_camera_spin_20261006/` under the WanGP root: compiled prompts and settings, contact sheets, key-frame strips, `make_settings.py` and `dense_path.json`. Renders are `D:/outputs/h3cam_spin_{A029,B030}_s{764485034,708144286}_1006.mp4` and `h3cam_spin_B030dense_s764485034_1006.mp4`; the labelled comparison is `D:/outputs/h3_camera_030_spin_fix_comparison_20261006.mp4`.
+
 ## Local 0.2.9 automatic timing acceptance - 2026-10-06
 
 Added a bounded workflow for one to three already rendered candidates. It checks measured source motion, retimes into a private temporary directory, remeasures the encoded output and publishes only an output passing the timing checks. Failed attempts are recorded and the next supplied candidate is tried; it never launches a new GPU generation. All-failed and invalid-input UI responses clear the previous video so an earlier success cannot be mistaken for the current result.

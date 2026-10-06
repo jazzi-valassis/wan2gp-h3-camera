@@ -118,14 +118,14 @@ class ElevationCompilerTests(unittest.TestCase):
         self.assertRegex(lens.lower(), r"(?:lens.*up|up.*lens)")
         self.assertNotRegex(segment.lower(), r"overhead|directly above")
 
-    def test_linear_orbit_push_pull_prompts_remain_byte_identical_with_roll_option_off(self):
+    def test_linear_orbit_push_pull_prompts_match_030_baseline_with_roll_option_off(self):
         cases = {
             "orbit": ([camera.ORIGIN, {"time": 1, "azimuth": 90, "elevation": 0, "distance": 1}],
-                      "68ec9c8b34aef0fb302c15177a99b1129f236bec08fb1a363ac04be98cb4d989"),
+                      "8450ce87c7c3423b866213cb7e50c7b599860bf256f932c6799ddad5b1c52698"),
             "push": ([camera.ORIGIN, {"time": 1, "azimuth": 0, "elevation": 0, "distance": 0.65}],
-                     "0ccc884892dde93243c3f6f47cb9d24da123054aa20462761444905fd79a9ec5"),
+                     "4ec467edba213583fcdbc86b5781caacd1e2b49ec1c43cb6350a8a27e33373a7"),
             "pull": ([camera.ORIGIN, {"time": 1, "azimuth": 0, "elevation": 0, "distance": 1.5}],
-                     "4521275d77b0efdca0b933bf3aa260dabb37e65b4f8cb3c4454cc44ff39446b5"),
+                     "0a92dd1c6ec5fa4cffd0c20a3d4a38b42c7750679cf6b0f089240d36a99cbaf1"),
         }
         for name, (path, expected) in cases.items():
             with self.subTest(name=name):

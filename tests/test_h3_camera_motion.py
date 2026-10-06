@@ -35,9 +35,9 @@ class MotionBoundaryTests(unittest.TestCase):
         self.assertAlmostEqual(result["rows"][2][1] - result["rows"][1][1], 2.42 / 24)
         self.assertIn("stop completely before the hold", first)
         self.assertIn("stationary for 0.100833 seconds", hold)
-        self.assertIn("azimuth 90 degrees, elevation 0 degrees and distance 1x", hold)
-        self.assertIn("keeps its orbit stopped", rise)
-        self.assertNotIn("around the main subject", rise)
+        self.assertIn("on a side view of the subject, at eye level, at 1x the starting distance", hold)
+        self.assertIn("rises straight up, staying on a side view of the subject", rise)
+        self.assertNotRegex(rise, r"around the (?:main )?subject|arc")
         self.assertNotIn("the subject keeps the same side", rise)
         self.assertIn("[5.142500s–10.083333s]", rise)
         self.assertEqual(len(result["warnings"]), 1)
@@ -60,9 +60,8 @@ class MotionBoundaryTests(unittest.TestCase):
         for end in (pose(1, elevation=89), pose(1, distance=.65)):
             result = compile_path([camera.ORIGIN, pose(.3), pose(.4), pose(.5), end])
             last = segment_lines(result)[-1]
-            self.assertIn("orbit stopped", last)
-            self.assertIn("azimuth at 90 degrees", last)
-            self.assertNotIn("around the main subject", last)
+            self.assertIn("staying on a side view of the subject", last)
+            self.assertNotRegex(last, r"around the (?:main )?subject|arc")
 
     def test_stationary_hold_does_not_freeze_scene_or_misclassify_small_motion(self):
         for end in (pose(1, elevation=.000001), pose(1, distance=1.000001), pose(1, azimuth=90.000001)):
@@ -77,6 +76,7 @@ class MotionBoundaryTests(unittest.TestCase):
         path = [camera.ORIGIN, pose(.5), pose(1, elevation=89)]
         result = compile_path(path)
         self.assertIn("without rounding off path corners or blending adjacent moves", result["prompt"])
+        self.assertNotIn("stop before starting the next segment", result["prompt"])
         self.assertIn("Pause only for explicitly timed hold intervals", result["prompt"])
         self.assertEqual(len(segment_lines(result)), 2)
         self.assertNotIn("stationary for", result["prompt"])
@@ -86,11 +86,11 @@ class MotionBoundaryTests(unittest.TestCase):
         path = [camera.ORIGIN, pose(.5), pose(.6), pose(1, elevation=89)]
         for reference in (False, True):
             first = compile_path(path, reference_mode=reference)
-            self.assertIn("Stabilize camera roll", first["prompt"])
-            self.assertIn("Use pan and tilt for framing corrections without adding roll", first["prompt"])
+            self.assertIn("Keep the horizon level and the camera upright", first["prompt"])
+            self.assertIn("Near the overhead view, keep the picture's orientation steady", first["prompt"])
             for prompt in (first["prompt"], "\n".join(line for line in first["prompt"].splitlines() if not line.startswith("#"))):
                 disabled = compile_path(path, prompt=prompt, reference_mode=reference, stabilize_roll=False)
-                self.assertNotIn("Stabilize camera roll", disabled["prompt"])
+                self.assertNotIn("Keep the horizon level", disabled["prompt"])
                 self.assertEqual(disabled["prompt"].count("Camera plan:"), 1)
                 restored = compile_path(path, prompt=disabled["prompt"], reference_mode=reference)
                 self.assertEqual(first["prompt"], restored["prompt"])
@@ -98,8 +98,9 @@ class MotionBoundaryTests(unittest.TestCase):
     def test_zero_azimuth_rise_never_suggests_circling_subject(self):
         path = [camera.ORIGIN, pose(.5, azimuth=0), pose(1, azimuth=0, elevation=89)]
         rise = segment_lines(compile_path(path))[-1]
-        self.assertIn("without orbiting sideways", rise)
-        self.assertNotIn("around the main subject", rise)
+        self.assertRegex(rise, r"The camera (?:slowly|steadily) rises straight up\. ")
+        self.assertIn("stays on the starting side of the subject for the whole take", compile_path(path)["prompt"])
+        self.assertNotRegex(rise, r"around the (?:main )?subject|orbit")
 
 
 if __name__ == "__main__":

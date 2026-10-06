@@ -128,7 +128,7 @@ class CameraPlanTests(unittest.TestCase):
             self.assertEqual(changed["prompt"].count("Camera plan:"), 1)
             self.assertNotIn("orbit 90 degrees", changed["prompt"])
             self.assertNotIn("<Picture 1>", changed["prompt"])
-            self.assertIn("dolly back", changed["prompt"].lower())
+            self.assertIn("dollies back", changed["prompt"].lower())
 
     def test_loop_alignment_is_removed_when_disabled(self):
         first = self.compile(camera.PRESETS["Full orbit"], close_loop=True, has_start_image=True)
