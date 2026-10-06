@@ -7,9 +7,10 @@
 - **Automatic hold timing.** While the page is open, new renders of a one-hold camera plan get a verified `_timed` copy whose hold sits on the planned frames; the plan is read from the video's metadata, the original is never changed, and the result plays in the panel.
 - Automatic correction also stretches the final move to the last frame when the camera settled early and the ending is frozen, falling back to a hold-only correction when that would exceed the movement limits. Refusals caused by a long linger suggest another seed.
 - Timing correction no longer refuses still holds that need more than 2x: the 0.5x-2x limit now applies to camera movement, and the measured hold may change up to 3x, or 10x when the whole frame is frozen. Eased moves need 40% (was 60%) of frames moving. The independent re-measurement accepts one frame of noise at an eased stop. Audio sections changed more than 4x are trimmed instead of tempo-squeezed.
+- Automatic correction keeps the original audio unless the plan contains dialogue: retiming stretched the rooftop ambience to half speed and cut its natural fade-out. Plans with H3 dialogue markup retime the audio for lip sync, keep their ending, and get 5 ms fades at section joins.
 - Release checksums and manifests are written with LF line endings, so `sha256sum -c` works on Linux and macOS.
 - Fix: the queue-backed Apply is registered through WanGP's plugin session (its handler uses the session directly), so view jobs are pumped in the live UI.
-- 140 tests pass. Validated on a second scene (robot workshop, left orbit with a rise, landscape) and end to end in the live UI: Apply generated the views, and the automatic copy of the render put the hold on the planned frames and the final arrival on the last frame. See VALIDATION.md.
+- 141 tests pass. Validated on a second scene (robot workshop, left orbit with a rise, landscape) and end to end in the live UI: Apply generated the views, and the automatic copy of the render put the hold on the planned frames and the final arrival on the last frame. See VALIDATION.md.
 
 ## 0.4.0 - 2026-10-06
 

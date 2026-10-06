@@ -16,6 +16,8 @@ MAX_FRAMES = 481
 AUDIO_MODES = ('retime', 'preserve', 'mute')
 # Compiled plan lines, as stored in WanGP's MP4 metadata (comment lines are stripped before saving).
 PLAN_LINE = re.compile(r'(?m)^Camera plan: one continuous take, (\d+) frames at ([0-9.]+) fps;')
+# H3 dialogue markup: <d>[Language] line</d> and (S1) speaker tags.
+DIALOGUE = re.compile(r'<d>|\(S\d+\)')
 HOLD_LINE = re.compile(r'(?m)^\[(\d+(?:\.\d+)?)s\u2013(\d+(?:\.\d+)?)s\] Hold the camera completely stationary')
 SAMPLE_MODES = ('nearest', 'blend')
 
@@ -235,11 +237,12 @@ def planned_hold(prompt, frames):
     return (first, last) if 0 < first < last < frames-1 else None
 
 
-def auto_correct(source, output_dir, audio='retime', sampling='nearest'):
+def auto_correct(source, output_dir, audio='auto', sampling='nearest'):
     """Retime a render of an H3 Camera plan so its measured hold lands on the planned frames.
 
-    Returns None when the clip has no single planned hold. Otherwise returns a record whose status is
-    'exact' (already on the planned frames), 'corrected' (verified copy published) or 'rejected'."""
+    ``audio='auto'`` keeps the original soundtrack unless the plan has dialogue: stretching ambience or
+    music by 2-4x smears it, while speech needs to stay in sync with the lips. Returns None when the clip
+    has no single planned hold; otherwise a record whose status is 'exact', 'corrected' or 'rejected'."""
     prompt = read_generation_prompt(source)
     if PLAN_LINE.search(prompt) is None or len(HOLD_LINE.findall(prompt)) != 1:
         return None  # Not a single-hold camera plan: skip the frame-counting probe.
@@ -247,13 +250,16 @@ def auto_correct(source, output_dir, audio='retime', sampling='nearest'):
     hold = planned_hold(prompt, info['frames'])
     if hold is None:
         return None
-    record = dict(source=info['path'], planned_hold_zero_based=list(hold), output=None, report=None)
+    if audio == 'auto':
+        audio = 'retime' if DIALOGUE.search(prompt) else 'preserve'
+    record = dict(source=info['path'], planned_hold_zero_based=list(hold), output=None, report=None, audio=audio)
     try:
         before = inspect_frames(info['path'], *hold, info)
         record['measured_hold_zero_based'] = before['source_marks'][1:3]
         last = info['frames']-1
         tail = settled_tail(before['motion'], before['source_marks'][2], info['frames'])
-        if tail is not None:
+        # With retimed dialogue, shortening the ending would cut its last words; leave it.
+        if tail is not None and audio != 'retime':
             # The camera settled early: end its final move on the second-to-last frame instead, unless that
             # would push the final move past the speed limits; then correct the hold alone.
             ending = dict(before, source_marks=[*before['source_marks'][:3], tail, last],
@@ -412,8 +418,12 @@ def audio_filter(source_marks, target_marks, fps, frame_count, sample_rate):
         speed = (b-a)/(d-c)
         # Tempo-shifting a long still into a few frames chirps; past 4x keep the section's start at normal speed.
         tempo = f'{_tempo_chain(speed)},' if 1/4 <= speed <= 4 else ''
+        # 5 ms fades keep the joins between retimed sections from clicking.
+        fade = min(.005, (d-c)/fps/4)
+        fades = (f'afade=t=in:d={fade:.6f},' if index else '') + (f'areverse,afade=t=in:d={fade:.6f},areverse,'
+                                                                    if index < len(source)-2 else '')
         chains.append(f'[1:a:0]atrim=start={a/fps:.12f}:end={b/fps:.12f},asetpts=PTS-STARTPTS,'
-                      f'{tempo}apad,atrim=end_sample={samples},asetpts=PTS-STARTPTS[{label}]')
+                      f'{tempo}apad,atrim=end_sample={samples},asetpts=PTS-STARTPTS,{fades}anull[{label}]')
         labels.append(f'[{label}]')
     chains.append(''.join(labels)+f'concat=n={len(labels)}:v=0:a=1[audio]')
     return ';'.join(chains)

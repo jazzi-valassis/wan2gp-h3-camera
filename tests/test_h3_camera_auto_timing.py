@@ -66,14 +66,14 @@ class EndingTests(unittest.TestCase):
         self.assertIsNone(timing.settled_tail(moving_pairs(243, [(107, 136), (238, 242)]), 136, 243))
         self.assertIsNone(timing.settled_tail(moving_pairs(243, [(107, 136)]), 136, 243))
 
-    def correct(self, still):
+    def correct(self, still, prompt=PLAN):
         info = dict(path="clip.mp4", frames=243)
         evidence = dict(media=dict(frames=243), motion=moving_pairs(243, still),
                         source_marks=[0, *still[0], 242], target_marks=[0, 121, 133, 242])
         exported = {}
 
-        def export(source, source_marks, target_marks, staging, *args):
-            exported.update(source=source_marks, target=target_marks)
+        def export(source, source_marks, target_marks, staging, audio, *args):
+            exported.update(source=source_marks, target=target_marks, audio=audio)
             video, report = Path(staging) / "clip_timed_x.mp4", Path(staging) / "clip_timed_x.timing.json"
             video.write_bytes(b"v")
             report.write_text("{}")
@@ -81,27 +81,43 @@ class EndingTests(unittest.TestCase):
 
         after = dict(media=dict(frames=243), motion=moving_pairs(243, [(121, 133)]),
                      source_marks=[0, 121, 133, 242], target_marks=[0, 121, 133, 242])
-        with tempfile.TemporaryDirectory() as folder, patch.object(timing, "read_generation_prompt", return_value=PLAN),                 patch.object(timing, "probe_video", return_value=info), patch.object(timing, "export_retimed", side_effect=export),                 patch.object(timing, "inspect_frames", side_effect=[evidence, after]):
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(timing, "read_generation_prompt", return_value=prompt), \
+                patch.object(timing, "probe_video", return_value=info), \
+                patch.object(timing, "export_retimed", side_effect=export), \
+                patch.object(timing, "inspect_frames", side_effect=[evidence, after]):
             result = timing.auto_correct("clip.mp4", folder)
         return result, exported
 
     def test_an_early_frozen_ending_is_moved_to_the_last_frame(self):
         result, exported = self.correct([(107, 136), (224, 242)])
         self.assertEqual(result["status"], "corrected")
-        self.assertEqual(exported, dict(source=[0, 107, 136, 224, 242], target=[0, 121, 133, 241, 242]))
+        self.assertEqual(exported, dict(source=[0, 107, 136, 224, 242], target=[0, 121, 133, 241, 242], audio="preserve"))
+        self.assertEqual(result["audio"], "preserve")
+
+    def test_dialogue_keeps_its_ending_and_retimes_audio_for_lip_sync(self):
+        spoken = PLAN.replace("A woman sits on a crate.", "A woman sits on a crate and says <d>[English] Hello.</d>")
+        result, exported = self.correct([(107, 136), (224, 242)], spoken)
+        self.assertEqual(exported, dict(source=[0, 107, 136, 242], target=[0, 121, 133, 242], audio="retime"))
+        self.assertEqual(result["audio"], "retime")
 
     def test_the_ending_is_left_alone_when_moving_it_would_slow_the_move_too_much(self):
         # Ending at 241 would play frames 180-230 over 133-241 (0.46x); the hold-only retime stays at 0.57x.
         result, exported = self.correct([(98, 180), (230, 242)])
         self.assertEqual(result["status"], "corrected")
-        self.assertEqual(exported, dict(source=[0, 98, 180, 242], target=[0, 121, 133, 242]))
+        self.assertEqual(exported, dict(source=[0, 98, 180, 242], target=[0, 121, 133, 242], audio="preserve"))
         self.assertIn("speed limit", result["ending_left_unchanged"])
 
-    def test_audio_is_trimmed_rather_than_squeezed_past_four_times(self):
+    def test_retimed_audio_is_trimmed_past_four_times_and_faded_at_joins(self):
         chains = timing.audio_filter([0, 98, 174, 242], [0, 121, 133, 242], 24, 243, 32000).split(";")
         self.assertIn("atempo", chains[0])
         self.assertNotIn("atempo", chains[1])
         self.assertIn("atempo", chains[2])
+        # Short fades at every join between sections (the last displayed frame is its own section),
+        # none at the clip's own start or end.
+        self.assertNotIn("afade", chains[0].split("areverse")[0])
+        self.assertTrue(all("afade" in chain for chain in chains[:4]))
+        self.assertNotIn("areverse", chains[3])
 
 
 class WatcherTests(unittest.TestCase):

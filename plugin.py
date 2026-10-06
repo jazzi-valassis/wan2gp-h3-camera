@@ -885,9 +885,12 @@ class _AutoTiming:
                 first, last = result["planned_hold_zero_based"]
                 ending = (" Its final move now ends on the last frame." if result.get("measured_final_arrival_zero_based") is not None
                           and not result.get("ending_left_unchanged") else "")
+                sound = (" Audio retimed to keep the dialogue in sync." if result.get("audio") == "retime"
+                         else " Original audio kept unchanged.")
                 self.latest = (version, result["output"],
                                f"Hold timing corrected for **{name}**: the camera is now still on frames **{first + 1}-{last + 1}** "
-                               f"as planned.{ending} Saved **{Path(result['output']).name}** with a timing report; the original is unchanged.")
+                               f"as planned.{ending}{sound} Saved **{Path(result['output']).name}** with a timing report; "
+                               "the original is unchanged.")
             elif result["status"] == "exact":
                 self.latest = (version, None, f"**{name}** already holds on the planned frames; no correction needed.")
             else:
