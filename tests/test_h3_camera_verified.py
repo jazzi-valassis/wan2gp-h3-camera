@@ -32,12 +32,36 @@ class VerifiedTimingTests(unittest.TestCase):
             else: data['motion'].pop()
             with self.subTest(kind=kind),self.assertRaises(ValueError): timing.assess_timing(data)
 
+    def test_still_hold_may_shorten_beyond_the_movement_limit(self):
+        data=evidence()
+        data['source_marks']=[0,14,23,40]
+        data['motion']=[dict(frame=i,pixels=.01 if 14<=i<23 else 3) for i in range(40)]
+        data['target_marks']=[0,15,19,40]
+        result=timing.assess_timing(data)
+        self.assertAlmostEqual(result['speeds'][1],9/4)
+        data['target_marks']=[0,6,10,40]
+        with self.assertRaisesRegex(ValueError,'camera movement'): timing.assess_timing(data)
+
+    def test_a_frozen_hold_may_shorten_up_to_ten_times(self):
+        data=evidence()
+        data['source_marks']=[0,10,25,40]
+        data['motion']=[dict(frame=i,pixels=.01 if 10<=i<25 else 3,change=.3 if 10<=i<25 else 9) for i in range(40)]
+        data['target_marks']=[0,12,14,40]
+        self.assertAlmostEqual(timing.assess_timing(data)['speeds'][1],7.5)
+        for pair in data['motion'][10:25]: pair['change']=4
+        with self.assertRaisesRegex(ValueError,'more than 3x'): timing.assess_timing(data)
+
     def test_extreme_speed_and_inexact_output_rejected(self):
         data=evidence()
         data['target_marks']=[0,18,19,40]
         with self.assertRaises(ValueError): timing.assess_timing(data)
-        data['target_marks']=[0,19,23,40]
+        data['target_marks']=[0,20,24,40]
         with self.assertRaises(ValueError): timing.assess_timing(data,exact=True)
+
+    def test_one_frame_of_remeasurement_noise_is_accepted(self):
+        data=evidence()
+        data['target_marks']=[0,19,22,40]
+        timing.assess_timing(data,exact=True)
 
     def test_failed_output_is_not_published_and_next_candidate_is_tried(self):
         with tempfile.TemporaryDirectory() as folder:

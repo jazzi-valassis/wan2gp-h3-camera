@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +14,9 @@ import uuid
 
 MAX_FRAMES = 481
 AUDIO_MODES = ('retime', 'preserve', 'mute')
+# Compiled plan lines, as stored in WanGP's MP4 metadata (comment lines are stripped before saving).
+PLAN_LINE = re.compile(r'(?m)^Camera plan: one continuous take, (\d+) frames at ([0-9.]+) fps;')
+HOLD_LINE = re.compile(r'(?m)^\[(\d+(?:\.\d+)?)s\u2013(\d+(?:\.\d+)?)s\] Hold the camera completely stationary')
 SAMPLE_MODES = ('nearest', 'blend')
 
 
@@ -161,7 +165,9 @@ def background_motion(source, info=None):
                     tracked_count = int(valid.sum())
                     if tracked_count >= 12:
                         median = float(np.median(np.linalg.norm(points-tracked,axis=2).ravel()[valid])/scale)
-                pairs.append(dict(frame=frame-1, pixels=median, tracked=tracked_count))
+                # Whole-frame change (0-255 grey levels) shows whether the subject also stays still.
+                pairs.append(dict(frame=frame-1, pixels=median, tracked=tracked_count,
+                                  change=float(cv2.absdiff(previous, gray).mean())))
             previous = gray
     finally:
         capture.release()
@@ -188,6 +194,12 @@ def find_stationary_interval(pairs, target_first, target_last, threshold=.5):
 def inspect_hold(source, path, keyframe):
     info = probe_video(source)
     first, last = held_path_frames(path, keyframe, info['frames'])
+    return inspect_frames(source, first, last, info)
+
+
+def inspect_frames(source, first, last, info=None):
+    """Measured still interval overlapping the planned 0-based hold frames ``first``..``last``."""
+    info = info or probe_video(source)
     pairs = background_motion(source, info)
     arrival, departure = find_stationary_interval(pairs, first, last)
     if not 0 < arrival < departure < info['frames']-1:
@@ -195,6 +207,80 @@ def inspect_hold(source, path, keyframe):
     return dict(media=info, source_marks=[0,arrival,departure,info['frames']-1],
                 target_marks=[0,first,last,info['frames']-1], motion=pairs, threshold_pixels=.5,
                 note='Suggested from background motion; review the camera view before exporting. Moving backgrounds or a large subject can mislead this measurement.')
+
+
+def read_generation_prompt(source):
+    """Prompt WanGP stored in the MP4 comment metadata, or '' when absent."""
+    result = _run([_tool('ffprobe'), '-v', 'error', '-show_entries', 'format_tags=comment', '-of', 'json', str(source)], timeout=30)
+    comment = ((json.loads(result.stdout).get('format') or {}).get('tags') or {}).get('comment') or ''
+    try:
+        settings = json.loads(comment)
+    except ValueError:
+        return ''
+    prompt = settings.get('prompt') if isinstance(settings, dict) else None
+    return prompt if isinstance(prompt, str) else ''
+
+
+def planned_hold(prompt, frames):
+    """0-based (first, last) frames of the single interior hold in an H3 Camera plan, or None.
+
+    The plan must have been compiled for this clip's frame count; several holds are left alone
+    because the correction maps exactly one hold."""
+    plan = PLAN_LINE.search(prompt or '')
+    holds = HOLD_LINE.findall(prompt or '')
+    if plan is None or int(plan[1]) != frames or len(holds) != 1:
+        return None
+    fps = float(plan[2])
+    first, last = (math.floor(float(seconds)*fps+.5) for seconds in holds[0])
+    return (first, last) if 0 < first < last < frames-1 else None
+
+
+def auto_correct(source, output_dir, audio='retime', sampling='nearest'):
+    """Retime a render of an H3 Camera plan so its measured hold lands on the planned frames.
+
+    Returns None when the clip has no single planned hold. Otherwise returns a record whose status is
+    'exact' (already on the planned frames), 'corrected' (verified copy published) or 'rejected'."""
+    prompt = read_generation_prompt(source)
+    if PLAN_LINE.search(prompt) is None or len(HOLD_LINE.findall(prompt)) != 1:
+        return None  # Not a single-hold camera plan: skip the frame-counting probe.
+    info = probe_video(source)
+    hold = planned_hold(prompt, info['frames'])
+    if hold is None:
+        return None
+    record = dict(source=info['path'], planned_hold_zero_based=list(hold), output=None, report=None)
+    try:
+        before = inspect_frames(info['path'], *hold, info)
+        record['measured_hold_zero_based'] = before['source_marks'][1:3]
+        last = info['frames']-1
+        tail = settled_tail(before['motion'], before['source_marks'][2], info['frames'])
+        if tail is not None:
+            # The camera settled early: end its final move on the second-to-last frame instead, unless that
+            # would push the final move past the speed limits; then correct the hold alone.
+            ending = dict(before, source_marks=[*before['source_marks'][:3], tail, last],
+                          target_marks=[*before['target_marks'][:3], last-1, last])
+            record['measured_final_arrival_zero_based'] = tail
+            try:
+                assess_timing(ending)
+                before = ending
+            except ValueError as error:
+                record['ending_left_unchanged'] = str(error)
+        if before['source_marks'] == before['target_marks']:
+            return dict(record, status='exact')
+        assess_timing(before)
+        output_dir = Path(output_dir).expanduser().resolve()
+        with tempfile.TemporaryDirectory(prefix='.h3-auto-', dir=output_dir) as staging:
+            video, report, mapping = export_retimed(info['path'], before['source_marks'], before['target_marks'], staging, audio, sampling)
+            assess_timing(inspect_frames(video, *hold), exact=True)
+            published = []
+            for staged in (video, report):
+                destination = output_dir/Path(staged).name
+                with destination.open('xb') as outgoing, open(staged, 'rb') as incoming:
+                    shutil.copyfileobj(incoming, outgoing)
+                published.append(str(destination))
+        return dict(record, status='corrected', output=published[0], report=published[1],
+                    repeated_source_frames=mapping['repeated_source_frames'])
+    except (ValueError, OSError, TypeError, subprocess.SubprocessError) as error:
+        return dict(record, status='rejected', reason=str(error))
 
 
 def _tempo_chain(speed):
@@ -226,16 +312,45 @@ def assess_timing(result, exact=False):
         segments.append(dict(coverage=coverage,moving_fraction=moving))
     if any(segment['coverage'] < .9 for segment in segments):
         raise ValueError('Insufficient background tracking: at least 90% coverage is required in every segment.')
-    if any(segments[index]['moving_fraction'] < .6 for index in (0,2)):
+    if len(segments) == 4 and (segments[3]['moving_fraction'] != 0 or not frozen_between(pairs, source[3], source[4])):
+        raise ValueError('The camera must be still and the frame frozen after its final move to shorten the ending.')
+    # Eased starts and far backgrounds move little at first; 40% still separates real moves from static shots.
+    if any(segments[index]['moving_fraction'] < .4 for index in (0,2)):
         raise ValueError('Insufficient movement before or after the hold; a frozen or mostly static shot cannot pass.')
     if segments[1]['moving_fraction'] != 0 or source[2]-source[1] < 3:
         raise ValueError('A measured stationary hold of at least three frame intervals is required.')
     speeds = [(b-a)/(d-c) for a,b,c,d in zip(source,source[1:],target,target[1:])]
-    if any(not .5 <= speed <= 2 for speed in speeds):
-        raise ValueError('Correction would exceed the automatic 0.5x to 2x speed limit. Review manually or try another render.')
-    if exact and source != target:
-        raise ValueError('The corrected clip did not measure the exact planned hold boundaries.')
+    if any(not .5 <= speed <= 2 for speed in (speeds[0], speeds[2])):
+        raise ValueError('Correction would exceed the automatic 0.5x to 2x speed limit for camera movement. Review manually or try another render.')
+    # The camera is measured still during the hold, so shortening or lengthening it only changes the pause.
+    # Subject motion in the pause is retimed too: up to 3x in general, 10x when the whole frame is frozen.
+    limit = 10 if frozen_between(pairs, source[1], source[2]) else 3
+    if not 1/limit <= speeds[1] <= limit:
+        raise ValueError(f'Correction would change the measured hold by more than {limit}x. Review manually or try another render.')
+    # The retime maps the hold boundaries exactly; re-measuring an eased stop can land one frame either side
+    # of the 0.5 px threshold, so the independent check allows one frame (1/fps) of measurement noise.
+    if exact and any(abs(a-b) > 1 for a,b in zip(source,target)):
+        raise ValueError('The corrected clip did not measure the planned hold boundaries within one frame.')
     return dict(segments=segments,speeds=speeds,geometry_verified=False,roll_verified=False)
+
+
+def frozen_between(pairs, first, last):
+    """Whether whole frames barely change from ``first`` to ``last``: neither camera nor subject moves."""
+    changes = [pair.get('change') for pair in pairs[first:last] if pair.get('change') is not None]
+    return bool(changes) and max(changes) < 3 and sum(changes)/len(changes) < 1
+
+
+def settled_tail(pairs, after, frames, minimum=6):
+    """First frame of a frozen ending reached before the last frame, or None.
+
+    Pair ``i`` measures frames ``i`` to ``i+1``, so the camera has arrived at frame ``last moving pair + 1``."""
+    moving = [pair['frame'] for pair in pairs if pair['pixels'] is not None and math.isfinite(pair['pixels']) and pair['pixels'] > .5]
+    if not moving:
+        return None
+    arrival = moving[-1]+1
+    if arrival <= after or frames-1-arrival < minimum or not frozen_between(pairs, arrival, frames-1):
+        return None
+    return arrival
 
 
 def verified_candidates(sources, path, keyframe, output_dir, audio='retime', sampling='nearest'):
@@ -294,8 +409,11 @@ def audio_filter(source_marks, target_marks, fps, frame_count, sample_rate):
     for index,(a,b,c,d) in enumerate(zip(source,source[1:],target,target[1:])):
         label = f'a{index}'
         samples = round(d/fps*sample_rate)-round(c/fps*sample_rate)
+        speed = (b-a)/(d-c)
+        # Tempo-shifting a long still into a few frames chirps; past 4x keep the section's start at normal speed.
+        tempo = f'{_tempo_chain(speed)},' if 1/4 <= speed <= 4 else ''
         chains.append(f'[1:a:0]atrim=start={a/fps:.12f}:end={b/fps:.12f},asetpts=PTS-STARTPTS,'
-                      f'{_tempo_chain((b-a)/(d-c))},apad,atrim=end_sample={samples},asetpts=PTS-STARTPTS[{label}]')
+                      f'{tempo}apad,atrim=end_sample={samples},asetpts=PTS-STARTPTS[{label}]')
         labels.append(f'[{label}]')
     chains.append(''.join(labels)+f'concat=n={len(labels)}:v=0:a=1[audio]')
     return ';'.join(chains)

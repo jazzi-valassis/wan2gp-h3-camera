@@ -38,8 +38,9 @@ def main():
             target.writestr(info, data)
             manifest[relative] = hashlib.sha256(data).hexdigest()
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    archive.with_suffix(".sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
-    archive.with_suffix(".files.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    # LF endings: Windows text mode would write CRLF and break `sha256sum -c` elsewhere.
+    archive.with_suffix(".sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8", newline="\n")
+    archive.with_suffix(".files.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps({"archive": str(archive.resolve()), "files": len(manifest),
                       "bytes": archive.stat().st_size, "sha256": digest}, indent=2))
 

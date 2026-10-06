@@ -1,8 +1,8 @@
 {
     "name": "H3 Camera",
     "author": "Jazzi",
-    "version": "0.4.0",
-    "description": "Plan H3 camera moves, anchor keyframe views generated from the Start Image, and align a generated hold to the planned frame boundaries.",
+    "version": "0.5.0",
+    "description": "Plan H3 camera moves, anchor keyframe views generated from the Start Image on Apply, and correct each render's hold timing automatically.",
     "type": ["extension"],
     "wan2gp_version": "17.01",
     "date": "2026-10-06",

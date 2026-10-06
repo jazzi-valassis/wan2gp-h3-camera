@@ -4,7 +4,7 @@ A visual single-shot camera planner for MiniMax H3 in [WanGP / Wan2GP](https://g
 
 **Author and maintainer:** [Jazzi](https://github.com/jazzi-valassis)
 
-**Version:** 0.4.0 · **License:** [MIT](LICENSE) · **Plugin type:** extension
+**Version:** 0.5.0 · **License:** [MIT](LICENSE) · **Plugin type:** extension
 
 The plugin adds no model downloads or GPU allocations. Camera movement is prompt guidance: the diagram does not impose an exact 3D trajectory on the model. Optional timing tools use FFmpeg/FFprobe on PATH and WanGP's existing OpenCV, NumPy and Pillow packages.
 
@@ -16,7 +16,8 @@ The plugin adds no model downloads or GPU allocations. Camera movement is prompt
 - Portable JSON plans and optional closed-loop conditioning using the existing Start Image.
 - Elevation instructions describe physical camera movement, lens tilt, and the requested endpoint view.
 - Optional roll stabilization, explicit stationary holds, and a button to insert a half-second hold.
-- Generated view anchors: one click renders each keyframe view from the Start Image (Qwen Image Edit 2511 + Multiple-Angles LoRA) and injects it at the keyframe, so H3 lands on the planned side and height.
+- Generated view anchors on Apply: each keyframe view is rendered from the Start Image (Qwen Image Edit 2511 + Multiple-Angles LoRA) and injected at the keyframe, so H3 lands on the planned side and height.
+- Automatic hold timing: renders of a one-hold plan get a verified `_timed` copy whose hold sits exactly on the planned frames.
 - Native image anchors at both ends of a hold, with automatic Picture numbering and reference preservation.
 - Timed image checkpoints within a move, with pass-through instructions that do not add stops or alter the saved path.
 - Extract a checkpoint image directly from a reviewed video frame.
@@ -52,7 +53,7 @@ Enable **H3 Camera**, save settings, and restart WanGP as above.
 
 ### Install from a ZIP
 
-Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.4.0.zip`, run `python scripts/build_release.py`. Use the Git installation method for the latest source version; downloadable releases may lag behind main.
+Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.5.0.zip`, run `python scripts/build_release.py`. Use the Git installation method for the latest source version; downloadable releases may lag behind main.
 
 The final layout must be:
 
@@ -88,7 +89,7 @@ The repository root contains the plugin files directly, so the public URL can be
 
 ## Compatibility
 
-Version **0.4.0** is tested with the installed **WanGP v17.01**, host HEAD `0e58385fbde7ff102d276e4a9e490845de76b4ea` with existing local host edits, and **Gradio 5.29.0**. Image anchoring needs the native `shared.prompt_enhancer.images.window_contexts` and `resolve_injected_positions` helpers and an H3 Ref2VA model supporting Inject Frames. If those helpers are absent, the image-anchor buttons are disabled; ordinary prompt planning remains available when the other requested host APIs exist. Timing correction needs FFmpeg/FFprobe on PATH. Older releases are not certified for the new image workflow. See [VALIDATION.md](VALIDATION.md) for the exact local checks.
+Version **0.5.0** is tested with the installed **WanGP v17.01**, host HEAD `0e58385fbde7ff102d276e4a9e490845de76b4ea` with existing local host edits, and **Gradio 5.29.0**. Image anchoring needs the native `shared.prompt_enhancer.images.window_contexts` and `resolve_injected_positions` helpers and an H3 Ref2VA model supporting Inject Frames. If those helpers are absent, the image-anchor buttons are disabled; ordinary prompt planning remains available when the other requested host APIs exist. Timing correction needs FFmpeg/FFprobe on PATH. Older releases are not certified for the new image workflow. See [VALIDATION.md](VALIDATION.md) for the exact local checks.
 
 The plugin uses `WAN2GPPlugin`, component/global requests, `insert_after`, and `add_custom_js`, plus the installed frame scheduler, prompt parser and native image-label helper. These are WanGP dependencies, not additional files to ship. It does not patch the pipeline, launch another server, submit its own generation jobs, or import `h3cam_ref` or MiniMaxH3Mod.
 
@@ -101,7 +102,8 @@ Missing required form controls or injected host functions produce a compatibilit
 3. Write one scene in the main prompt, including any desired dialogue and sound. Set the native frame count and FPS.
 4. Open **H3 Camera - single-shot planner** below the prompt. Choose a preset, edit keyframes and preview the camera move. Time is normalized across the selected clip, with the final pose at its last frame.
 5. Choose whether the scene can animate (default) or is frozen, and smooth or linear camera movement. **Stabilize camera roll** is on by default; turn it off for intentional banking or lens-axis rotation. **Preview camera prompt** changes no generation settings.
-6. Click **Apply camera path to generation form**, then use the normal **Generate** or **Add to Queue** button. Apply again after editing the path, scene, or duration.
+6. Click **Apply camera path to generation form**, then use the normal **Generate** or **Add to Queue** button. With an H3 Ref2VA model and a Start Image, Apply first anchors generated keyframe views (see below); otherwise it applies text guidance and the status says why. Apply again after editing the path, scene, or duration.
+7. Leave the page open while rendering: **Automatic hold timing** saves a `_timed` copy whose hold sits exactly on the planned frames.
 
 Select a keyframe in the strip, then drag the diagram horizontally to orbit or vertically to change elevation. The first drag direction locks that axis until release. Focus the diagram and use the mouse wheel to change distance, or use its arrow keys (hold Shift for larger steps). Numeric controls provide precise edits. **Add** inserts a keyframe between the selected pose and the next pose; the first pose stays fixed. Scrub or play to preview the planned move.
 
@@ -131,15 +133,28 @@ Use **Camera path JSON and saved plans** to save or load portable `.json` plans.
 
 ### Generated view anchors (recommended for orbits)
 
-Prompt wording cannot say which side of the subject an orbit should finish on, and some seeds circle past the subject's back to the far side. **Generate view anchors and apply camera path** gives H3 a picture of each target view instead:
+Prompt wording cannot say which side of the subject an orbit should finish on, and some seeds circle past the subject's back to the far side. With **Anchor keyframe views with generated images** on (the default), **Apply** gives H3 a picture of each target view instead:
 
 1. Select an H3 **Ref2VA** model and add exactly one active **Start Image**. Keep the identity reference in **Reference Images** if you use one.
 2. Plan the path. A keyframe gets a view when its orbit angle is within 5 degrees of a 45-degree step (±45, ±90, ±135, 180) and its elevation within 15 degrees of -30, 0, 30 or 60. The start view is never re-anchored (the Start Image already shows it). When several keyframes round to the same view, only the closest pose keeps it, together with its exact repeats (a hold): the same still at two different poses would read as a stop. Other keyframes keep text guidance only, so a dense path with a keyframe every second is anchored only at its exact views.
-3. Click **Generate view anchors and apply camera path**. The plugin queues one Qwen Image Edit Plus (2511) image per distinct keyframe view, rendered from the Start Image with fal's Multiple-Angles LoRA and the 8-step Lightning LoRA. It then injects each view at its keyframe frame (a hold shares one view at both ends), renumbers your `<Picture N>` labels and applies the camera path. Generate normally afterwards.
+3. Click **Apply camera path to generation form**. The plugin queues one Qwen Image Edit Plus (2511) image per distinct keyframe view, rendered from the Start Image with fal's Multiple-Angles LoRA and the 8-step Lightning LoRA. It injects each view at its keyframe frame (a hold shares one view at both ends), renumbers your `<Picture N>` labels and applies the camera path. The status lists which keyframes got which view and which keep text guidance. Generate normally afterwards.
 
-The views use WanGP's normal queue, so they appear in the gallery and need the Media Generator tab to stay focused while they render (about 15-30 seconds per view plus a model switch). The model and both LoRAs download on first use. **View image seed** changes the generated views; apply again to replace them. Distances map to the LoRA's shot sizes (close-up at 0.6x or closer, wide at 1.6x or farther, medium otherwise), so the anchored framing is approximate and depends on how wide the Start Image is.
+When views cannot be added (anchors turned off, an FL2VA model, no Start Image, no keyframe matching a LoRA view, or a WanGP build without the plugin generation API), Apply still applies the text plan and appends *Text guidance only: <reason>* to the status.
 
-Views are generated stills: they fix the camera side, height and the endpoint view, and they also fix the subject's pose and the background at those frames. Review them before generating; regenerate with another seed if a view is wrong.
+The views use WanGP's normal queue, so they appear in the gallery and need the Media Generator tab to stay focused while they render (about 15-30 seconds per view plus a model switch). The model and both LoRAs download on first use. Views are cached per Start Image, view and **View image seed**, so applying again reuses them; change the seed to get new ones. Views from an earlier Apply are removed before new ones are injected, so an edited path never keeps stale anchors. Distances map to the LoRA's shot sizes (close-up at 0.6x or closer, wide at 1.6x or farther, medium otherwise), so the anchored framing is approximate and depends on how wide the Start Image is.
+
+Views are generated stills: they fix the camera side, height and the endpoint view, and they also fix the subject's pose and the background at those frames. The LoRA draws 45-degree orbit steps and four heights, so angles between them are approximate (a 48-degree keyframe uses the 60-degree "high-angle" view, which reads as a high angle of roughly 40-50 degrees in practice). Review the views before generating; regenerate with another seed if one is wrong.
+
+### Automatic hold timing
+
+H3 often arrives at a hold a few frames early or leaves it late. With **Correct hold timing automatically after each render** on (the default), the panel watches WanGP's output folder while the page is open. When a new render of a camera plan with exactly one hold appears, it:
+
+1. reads the planned hold from the prompt stored in the video's metadata;
+2. finds the camera's actual still interval from background motion;
+3. retimes the clip so that interval lands on the planned frames, keeping duration, FPS, size and both end frames, and retiming audio with its pitch kept. If the camera settled on its final view early and the rest of the clip is frozen, the final move is also stretched to end on the last frame, when that stays within the speed limits;
+4. re-measures the copy and publishes `<name>_timed_<id>.mp4` with a `.timing.json` report next to the original, which is never changed.
+
+The result plays in the panel with a status line. A correction is refused, and the original kept, when the camera moves before or after the hold would need more than a 2x speed change, the measured hold would change by more than 3x (10x when the whole frame is frozen, so only identical-looking frames are dropped), background tracking is unreliable, or the re-measured copy misses the planned boundaries by more than one frame (1/fps, the measurement's resolution). H3 sometimes stays at an anchored hold for 2-3 seconds; such a render would need slow motion to fix, so it is refused with a suggestion to try another seed. Retiming repeats or drops some frames; repeated frames can show as a slight stutter in a stretched move. Audio follows the video; a section shortened or lengthened more than 4x keeps its first part at normal speed instead of being squeezed. Plans with several holds are left alone.
 
 ### Image anchors for a camera hold
 
@@ -210,7 +225,7 @@ After updating, load your saved plan and press **Apply** again to obtain the new
 
 ## Limits
 
-- Camera coordinates become text instructions; this is approximate prompt guidance, not an enforced 3D camera track.
+- Camera coordinates become text instructions plus, where possible, generated view anchors; this is guidance, not an enforced 3D camera track. Angles between the LoRA's 45-degree steps and four heights are approximate.
 - The first pose is fixed at time 0, azimuth/elevation 0, distance 1. The last time is 1. Use 2–24 keyframes.
 - The planner supports one shot/window, up to 481 frames. Dedicated H3 ControlNet models, multi-shot prompts, scheduler slash commands, video continuation, Control Video editing, still-image mode and audio-only models are rejected before applying.
 - Audio sections and reference tokens in the scene prompt are retained. Frozen mode deliberately overrides subject/environment movement; audio stays governed by the scene prompt.

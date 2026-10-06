@@ -1,9 +1,12 @@
 """Visual camera planning; generation continues through WanGP's native form."""
 
+import hashlib
 import json
 import math
+import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 import tempfile
 import time
@@ -55,7 +58,7 @@ class H3CameraPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = "H3 Camera"
-        self.version = "0.4.0"
+        self.version = "0.5.0"
         self.type = ["extension"]
         self.description = "Visual single-shot camera paths for MiniMax H3"
 
@@ -144,20 +147,33 @@ class H3CameraPlugin(WAN2GPPlugin):
             views_ready = self._wangp_session is not None and window_contexts is not None
             with gr.Accordion("Generated view anchors (recommended for orbits)", open=True):
                 gr.Markdown("Text alone does not tell H3 which side to end on, so some seeds orbit past the subject's back. "
-                            "This renders a still of each keyframe view from the Start Image with Qwen Image Edit Plus (2511), "
-                            "the Multiple-Angles LoRA and the 8-step Lightning LoRA, then injects the views at their keyframe "
-                            "times and applies the camera path. Keyframes need orbit angles within 5 degrees of a 45-degree step "
-                            "and elevations near -30, 0, 30 or 60 degrees; other keyframes keep text guidance only. Requires an H3 Ref2VA model "
-                            "and one Start Image. Each view takes about 15-30 seconds plus a model switch; models and LoRAs "
-                            "download on first use. Views appear in the gallery. Keep the form unchanged until it finishes.")
+                            "With this on, **Apply** first renders a still of each keyframe view from the Start Image with "
+                            "Qwen Image Edit Plus (2511), the Multiple-Angles LoRA and the 8-step Lightning LoRA, then injects "
+                            "the views at their keyframe times. Keyframes need orbit angles within 5 degrees of a 45-degree step "
+                            "and elevations near -30, 0, 30 or 60 degrees; other keyframes keep text guidance only. It needs an "
+                            "H3 Ref2VA model and one Start Image; otherwise Apply uses text guidance and says why. Views take "
+                            "about 15-30 seconds each plus a model switch (cached for the same image, view and seed), appear in "
+                            "the gallery, and need the Media Generator tab focused while they render.")
                 with gr.Row():
-                    view_seed = gr.Number(label="View image seed", value=42, precision=0, minimum=0)
-                    generate_views = gr.Button("Generate view anchors and apply camera path", variant="primary",
+                    anchor_views = gr.Checkbox(label="Anchor keyframe views with generated images", value=views_ready,
                                                interactive=views_ready)
+                    view_seed = gr.Number(label="View image seed", value=42, precision=0, minimum=0)
                 views = gr.Gallery(label="Generated views", columns=4, height=260, interactive=False)
                 if not views_ready:
                     gr.Markdown("This WanGP build lacks the plugin generation API or timed-image labels. Update WanGP to "
                                 "generate view anchors.")
+            with gr.Accordion("Automatic hold timing", open=True):
+                gr.Markdown("H3 often arrives at a hold early or leaves it late. When a render of a camera plan with one hold "
+                            "appears in the output folder, this measures the still interval from background motion, retimes "
+                            "the clip so the hold sits exactly on the planned frames, re-measures it and saves a `_timed` copy "
+                            "next to the original (same duration, FPS and size; audio retimed with pitch kept). The original "
+                            "is never changed. Clips that need more than a 2x speed change while the camera moves are left as "
+                            "they are. It runs while this page is open.")
+                auto_timing = gr.Checkbox(label="Correct hold timing automatically after each render", value=True)
+                auto_video = gr.Video(label="Latest render with corrected hold timing", interactive=False)
+                auto_status = gr.Markdown()
+                auto_shown = gr.State(value=0)
+                auto_timer = gr.Timer(5)
             with gr.Accordion("Image anchors for a camera hold", open=False):
                 gr.Markdown("For H3 Ref2VA, choose an image showing the view the camera should hold. Use the same aspect ratio "
                             "as the Start Image: native injection takes its canvas from the first injected image. The button places it at both ends "
@@ -222,19 +238,40 @@ class H3CameraPlugin(WAN2GPPlugin):
                                  datatype=["number"] * 5, interactive=False)
             compiled = gr.Textbox(label="Camera prompt preview", lines=6, interactive=False)
             status = gr.Markdown()
+            # Changes when Apply finishes; drives the native label refresh after the queue-backed Apply.
+            gr.HTML("<style>#h3-camera-applied{display:none!important}</style>")
+            applied = gr.Textbox(elem_id="h3-camera-applied", show_label=False)
             args = [path, motion, interpolation, close_loop, *[components[name] for name in FORM_INPUTS], stabilize_roll,
                     components["frames_positions"]]
             preview.click(self.preview, inputs=args, outputs=[table, compiled, status], api_name="h3_camera_preview")
-            apply.click(self.apply_plan, inputs=args, outputs=[*[components[name] for name in FORM_OUTPUTS],
-                        table, compiled, status], api_name="h3_camera_apply").success(
-                self.refresh_prompt_labels,
-                inputs=[components[name] for name in ("state", "multi_prompts_gen_type", "image_mode")],
-                outputs=[components[name] for name in LABEL_OUTPUTS], show_progress="hidden", api_name=False,
-            ).success(
-                self.refresh_video_length_label,
-                inputs=[components[name] for name in ("state", "video_length", "force_fps", "video_guide", "video_source")],
-                outputs=components["video_length"], show_progress="hidden", api_name=False,
-            ).then(fn=None, inputs=None, outputs=None, js=self.PROMPT_TOOLS_ATTACH_JS, api_name=False)
+            label_refresh = dict(fn=self.refresh_prompt_labels,
+                                 inputs=[components[name] for name in ("state", "multi_prompts_gen_type", "image_mode")],
+                                 outputs=[components[name] for name in LABEL_OUTPUTS], show_progress="hidden", api_name=False)
+            length_refresh = dict(fn=self.refresh_video_length_label,
+                                  inputs=[components[name] for name in ("state", "video_length", "force_fps", "video_guide", "video_source")],
+                                  outputs=components["video_length"], show_progress="hidden", api_name=False)
+            smart_apply = False
+            if self._wangp_session is not None:
+                try:
+                    with self._wangp_session.plugin_ui_context():
+                        apply.click(self.apply_camera, inputs=[anchor_views, view_seed, *args],
+                                    outputs=[*[components[name] for name in FORM_OUTPUTS], table, compiled, status,
+                                             *[components[name] for name in ANCHOR_OUTPUTS], views, applied],
+                                    api_name="h3_camera_apply")
+                    smart_apply = True
+                except RuntimeError:
+                    pass  # No main WebUI queue bridge (older hosts, tests): Apply stays text-only.
+            if smart_apply:
+                # The queue-backed click finishes in a follow-up event; refresh native labels when it does.
+                applied.change(**label_refresh).then(**length_refresh).then(
+                    fn=None, inputs=None, outputs=None, js=self.PROMPT_TOOLS_ATTACH_JS, api_name=False)
+            else:
+                anchor_views.interactive = False
+                apply.click(self.apply_plan, inputs=args, outputs=[*[components[name] for name in FORM_OUTPUTS],
+                            table, compiled, status], api_name="h3_camera_apply").success(**label_refresh).success(
+                    **length_refresh).then(fn=None, inputs=None, outputs=None, js=self.PROMPT_TOOLS_ATTACH_JS, api_name=False)
+            auto_timer.tick(self.auto_timing_tick, inputs=[auto_timing, auto_shown],
+                            outputs=[auto_video, auto_status, auto_shown], show_progress="hidden", api_name=False)
             anchor_hold.click(self.apply_hold_image, inputs=[hold_image, hold_keyframe, *args],
                               outputs=[*[components[name] for name in FORM_OUTPUTS], table, compiled, status,
                                        *[components[name] for name in ANCHOR_OUTPUTS]], api_name="h3_camera_anchor_hold").success(
@@ -257,26 +294,6 @@ class H3CameraPlugin(WAN2GPPlugin):
                 inputs=[components[name] for name in ("state", "video_length", "force_fps", "video_guide", "video_source")],
                 outputs=components["video_length"], show_progress="hidden", api_name=False,
             ).then(fn=None, inputs=None, outputs=None, js=self.PROMPT_TOOLS_ATTACH_JS, api_name=False)
-            if self._wangp_session is not None:
-                try:
-                    with self._wangp_session.plugin_ui_context():
-                        generate_views.click(self.generate_view_anchors, inputs=[view_seed, *args],
-                                             outputs=[*[components[name] for name in FORM_OUTPUTS], table, compiled, status,
-                                                      *[components[name] for name in ANCHOR_OUTPUTS], views],
-                                             api_name="h3_camera_view_anchors")
-                except RuntimeError:
-                    # Hosts without the main WebUI queue bridge cannot run plugin generations.
-                    generate_views.interactive = False
-                # The wrapped click finishes in a follow-up event, so refresh labels when the views arrive.
-                views.change(
-                    self.refresh_prompt_labels,
-                    inputs=[components[name] for name in ("state", "multi_prompts_gen_type", "image_mode")],
-                    outputs=[components[name] for name in LABEL_OUTPUTS], show_progress="hidden", api_name=False,
-                ).then(
-                    self.refresh_video_length_label,
-                    inputs=[components[name] for name in ("state", "video_length", "force_fps", "video_guide", "video_source")],
-                    outputs=components["video_length"], show_progress="hidden", api_name=False,
-                ).then(fn=None, inputs=None, outputs=None, js=self.PROMPT_TOOLS_ATTACH_JS, api_name=False)
             upload.change(self.load_plan, inputs=upload, outputs=[path, motion, interpolation, close_loop, stabilize_roll])
             extract_checkpoint.click(self.extract_checkpoint, inputs=[checkpoint_video, checkpoint_source_frame],
                                      outputs=[checkpoint_image, extraction_status], api_name="h3_camera_extract_checkpoint")
@@ -562,64 +579,138 @@ class H3CameraPlugin(WAN2GPPlugin):
             return str(target), item.size
         raise gr.Error("The Start Image could not be read for view generation.")
 
-    def generate_view_anchors(self, seed, *args):
-        """Render keyframe views with Qwen Edit, inject them as anchors and apply the camera path."""
+    @staticmethod
+    def _as_updates(values):
+        """Streamed results are diffs against the previous yield, so every output must stay an update dict:
+        a raw value following gr.update() becomes a patch the browser cannot apply."""
+        return tuple(value if isinstance(value, dict) and value.get("__type__") == "update" else gr.update(value=value)
+                     for value in values)
+
+    def _views_unavailable(self, use_views, args):
+        """Why view anchors cannot be added to this form, or None."""
+        if not use_views:
+            return "view anchors are turned off."
+        if self._wangp_session is None or window_contexts is None:
+            return "this WanGP build lacks the plugin generation API or timed-image labels."
+        try:
+            _, initial = self._anchor_form(args)
+        except gr.Error as error:
+            return str(error.message if hasattr(error, "message") else error)
+        targets, _ = view_anchors.anchor_targets(initial["path"], initial["frame_count"], keyframe_frame)
+        if not targets:
+            return ("no keyframe matches a view the Multiple-Angles LoRA can render (orbit within 5 degrees of a "
+                    "45-degree step, elevation near -30, 0, 30 or 60 degrees).")
+        return None
+
+    def apply_camera(self, use_views, seed, *args):
+        """Apply the camera path, first anchoring generated keyframe views when this form allows it."""
+        # WanGP pumps the queue only for handlers whose own code uses the plugin session.
+        session = self._wangp_session
+        anchors = len(ANCHOR_OUTPUTS)
+        text_only = list(self.apply_plan(*args))  # Validates the plan; invalid input raises before any change.
+        reason = self._views_unavailable(use_views, args)
+        if reason:
+            text_only[-1] += f" Text guidance only: {reason}"
+            yield self._as_updates((*text_only, *[gr.update()] * anchors, gr.update(), str(time.time_ns())))
+            return
+        for final, updates in self._view_anchor_steps(session, seed, args):
+            yield (*updates, gr.update(value=str(time.time_ns())) if final else gr.update())
+
+    @staticmethod
+    def _item_path(item):
+        if isinstance(item, (tuple, list)) and item:
+            item = item[0]
+        if isinstance(item, dict):
+            item = item.get("path") or (item.get("image") or {}).get("path")
+        return str(item) if isinstance(item, (str, Path)) else None
+
+    def _without_generated_views(self, values, initial):
+        """Drop views injected by an earlier Apply so a changed path never keeps stale anchors."""
+        refs = list(values["image_refs"] or [])
+        flags = values["video_prompt_type"] or ""
+        positions = self._injection_positions(values, initial)
+        stale = [index for index in range(len(positions)) if view_anchors.is_generated_view(self._item_path(refs[index]))]
+        if not stale:
+            return values
+        before = self._picture_numbers(list(range(len(refs))), positions, initial, values)
+        keep = [index for index in range(len(refs)) if index not in stale]
+        kept_positions = [frame for index, frame in enumerate(positions) if index not in stale]
+        cleaned = dict(values, image_refs=[refs[index] for index in keep],
+                       frames_positions=" ".join(str(frame + 1) for frame in kept_positions),
+                       video_prompt_type=flags if kept_positions else flags.replace("F", ""))
+        after = self._picture_numbers(keep, kept_positions, initial, cleaned)
+        renumber = {before[index]: after[index] for index in keep}
+        cleaned["prompt"] = re.sub(r"<Picture\s+([1-9]\d*)>",
+                                   lambda match: f"<Picture {renumber.get(int(match[1]), int(match[1]))}>",
+                                   strip_camera_plan(values["prompt"] or ""))
+        return cleaned
+
+    def _view_anchor_steps(self, session, seed, args):
+        """Yield (final, updates): progress messages, then the anchored and applied form."""
         count = len(FORM_OUTPUTS) + 3 + len(ANCHOR_OUTPUTS) + 1
         status_index = len(FORM_OUTPUTS) + 2
 
-        # Streamed results are sent as diffs against the previous yield, so every output stays an
-        # update dict: a raw value following gr.update() becomes a patch the browser cannot apply.
         def status_only(message):
             updates = [gr.update()] * count
             updates[status_index] = gr.update(value=message)
             return tuple(updates)
 
-        def as_updates(values):
-            return tuple(value if isinstance(value, dict) and value.get("__type__") == "update" else gr.update(value=value)
-                         for value in values)
-
-        if self._wangp_session is None:
-            raise gr.Error("This WanGP build lacks the plugin generation API needed for view anchors.")
         values, initial = self._anchor_form(args)
         try:
-            positions = self._injection_positions(values, initial)
             seed = int(seed)
             if seed < 0:
                 raise ValueError("Use a view image seed of 0 or more.")
+            values = self._without_generated_views(values, initial)
+            positions = self._injection_positions(values, initial)
         except (ValueError, TypeError, OverflowError) as error:
             raise gr.Error(str(error)) from error
         targets, skipped = view_anchors.anchor_targets(initial["path"], initial["frame_count"], keyframe_frame)
-        if not targets:
-            raise gr.Error("No keyframe matches a view the Multiple-Angles LoRA can render. Use orbit angles in 45-degree "
-                           "steps and elevations near -30, 0, 30 or 60 degrees, or anchor images manually below.")
         image_path, size = self._image_file(initial["image_start"][0])
+        resolution = view_anchors.view_resolution(*size)
+        image_hash = hashlib.sha1(Path(image_path).read_bytes()).hexdigest()
+        cache = self.__dict__.setdefault("_view_cache", {})
         prompts = list(dict.fromkeys(targets.values()))
-        tasks = view_anchors.view_tasks(prompts, image_path, view_anchors.view_resolution(*size), seed)
-        yield status_only(f"Generating {len(prompts)} view image(s) with Qwen Image Edit Plus (2511) in the WanGP queue...")
-        job = self._wangp_session.submit(tasks)
-        started = last = time.time()
-        while not job.done:
-            time.sleep(0.5)
-            if time.time() - last >= 5:
-                last = time.time()
-                yield status_only(f"Generating {len(prompts)} view image(s)... {int(last - started)}s elapsed.")
-        result = job.result(timeout=1.0)
-        if result.cancelled:
-            raise gr.Error("View generation was cancelled; the generation form is unchanged.")
-        files = list(result.generated_files or [])
-        if not result.success or len(files) != len(prompts):
-            errors = "; ".join(error.message for error in result.errors) or "the queue returned no images"
-            raise gr.Error(f"View generation failed ({errors}); the generation form is unchanged.")
-        images = dict(zip(prompts, files))
+        images = {}
+        for prompt in prompts:
+            cached = cache.get((image_hash, prompt, seed, resolution))
+            if cached and Path(cached).is_file():
+                images[prompt] = cached
+        missing = [prompt for prompt in prompts if prompt not in images]
+        if missing:
+            tasks = view_anchors.view_tasks(missing, image_path, resolution, seed)
+            yield False, status_only(f"Generating {len(missing)} view image(s) with Qwen Image Edit Plus (2511) in the WanGP queue...")
+            job = session.submit(tasks)
+            started = last = time.time()
+            while not job.done:
+                time.sleep(0.5)
+                if time.time() - last >= 5:
+                    last = time.time()
+                    yield False, status_only(f"Generating {len(missing)} view image(s)... {int(last - started)}s elapsed.")
+            result = job.result(timeout=1.0)
+            if result.cancelled:
+                raise gr.Error("View generation was cancelled; the generation form is unchanged.")
+            files = list(result.generated_files or [])
+            if not result.success or len(files) != len(missing):
+                errors = "; ".join(error.message for error in result.errors) or "the queue returned no images"
+                raise gr.Error(f"View generation failed ({errors}); the generation form is unchanged.")
+            for prompt, file in zip(missing, files):
+                images[prompt] = cache[(image_hash, prompt, seed, resolution)] = file
         frames = sorted(targets)
-        description = (f" Generated view anchors at frames {' '.join(str(frame + 1) for frame in frames)} (1-based) "
-                       f"from {len(prompts)} Qwen Image Edit view(s), seed {seed}.")
-        if skipped:
-            description += (f" Keyframes {', '.join(map(str, skipped))} are between the LoRA's views and keep "
-                            "text guidance only.")
+        description = (f" Generated view anchors at frames {' '.join(str(frame + 1) for frame in frames)} (1-based), seed {seed}."
+                       + view_anchors.describe(initial["path"], initial["frame_count"], keyframe_frame, targets, skipped))
         updates = self._apply_image_updates(values, initial, positions,
                                             {frame: images[targets[frame]] for frame in frames}, description)
-        yield as_updates((*updates, [(images[prompt], prompt.replace("<sks> ", "")) for prompt in prompts]))
+        yield True, self._as_updates((*updates, [(images[prompt], prompt.replace("<sks> ", "")) for prompt in prompts]))
+
+    def auto_timing_tick(self, enabled, shown):
+        """Timer callback: start corrections for new renders and show the latest result once."""
+        folder = getattr(self, "save_path", None)
+        watcher = self.__dict__.setdefault("_auto_timing", _AutoTiming())
+        message = watcher.poll(folder, bool(enabled)) if folder and os.path.isdir(folder) else None
+        version, video, note = watcher.latest
+        if version == shown:
+            return gr.update(), (gr.update(value=message) if message else gr.update()), shown
+        return (gr.update(value=video) if video else gr.update()), gr.update(value=message or note), version
 
     @staticmethod
     def extract_checkpoint(video, frame):
@@ -737,3 +828,69 @@ class H3CameraPlugin(WAN2GPPlugin):
                 return target.name
         except (OSError, ValueError, TypeError) as error:
             raise gr.Error(str(error)) from error
+
+
+class _AutoTiming:
+    """Watch the output folder for renders of a one-hold camera plan and publish verified retimed copies."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.started = time.time()
+        self.seen = {}
+        self.busy = None
+        self.latest = (0, None, "")
+
+    def poll(self, folder, enabled):
+        with self.lock:
+            if self.busy:
+                return f"Correcting hold timing of **{Path(self.busy).name}**..."
+            if not enabled:
+                return None
+            candidate = self._next(folder)
+            if candidate is None:
+                return None
+            self.busy = candidate
+        threading.Thread(target=self._run, args=(candidate, folder), daemon=True, name="h3-camera-auto-timing").start()
+        return f"Correcting hold timing of **{Path(candidate).name}**..."
+
+    def _next(self, folder):
+        now, best = time.time(), None
+        for entry in os.scandir(folder):
+            name = entry.name.lower()
+            if not entry.is_file() or not name.endswith(".mp4") or "_timed_" in name or name.startswith("."):
+                continue
+            modified = entry.stat().st_mtime
+            # Skip files from before this session, files still being written, and files already handled.
+            if modified < self.started or now - modified < 4 or self.seen.get(entry.path) == modified:
+                continue
+            if best is None or modified > best[1]:
+                best = (entry.path, modified)
+        if best is None:
+            return None
+        self.seen[best[0]] = best[1]
+        return best[0]
+
+    def _run(self, source, folder):
+        name = Path(source).name
+        try:
+            result = camera_timing.auto_correct(source, folder)
+        except Exception as error:
+            result = dict(status="rejected", reason=str(error))
+        with self.lock:
+            self.busy = None
+            if result is None:
+                return
+            version = self.latest[0] + 1
+            if result["status"] == "corrected":
+                first, last = result["planned_hold_zero_based"]
+                ending = (" Its final move now ends on the last frame." if result.get("measured_final_arrival_zero_based") is not None
+                          and not result.get("ending_left_unchanged") else "")
+                self.latest = (version, result["output"],
+                               f"Hold timing corrected for **{name}**: the camera is now still on frames **{first + 1}-{last + 1}** "
+                               f"as planned.{ending} Saved **{Path(result['output']).name}** with a timing report; the original is unchanged.")
+            elif result["status"] == "exact":
+                self.latest = (version, None, f"**{name}** already holds on the planned frames; no correction needed.")
+            else:
+                hint = (" H3 stayed at the hold too long for a clean retime; another seed usually times it better."
+                        if "speed limit" in result.get("reason", "") or "more than" in result.get("reason", "") else "")
+                self.latest = (version, None, f"Hold timing of **{name}** was left unchanged: {result.get('reason', 'not correctable')}{hint}")

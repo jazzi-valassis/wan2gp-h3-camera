@@ -25,7 +25,7 @@ def main():
         "plan": ("test_h3_camera_plan.py", "test_h3_camera_elevation.py", "test_h3_camera_orbit.py", "test_h3_camera_motion.py",
                  "test_h3_camera_anchors.py", "test_h3_camera_spin.py"),
         "integration": ("test_h3_camera_plugin.py", "test_h3_camera_labels.py", "test_h3_camera_anchor_plugin.py", "test_h3_camera_timing.py",
-                        "test_h3_camera_verified.py", "test_h3_camera_view_anchors.py"),
+                        "test_h3_camera_verified.py", "test_h3_camera_view_anchors.py", "test_h3_camera_auto_timing.py"),
         "native": ("test_h3_camera_roundtrip.py",),
     }
     suite = unittest.TestSuite()

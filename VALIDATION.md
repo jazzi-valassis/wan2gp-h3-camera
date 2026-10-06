@@ -1,5 +1,36 @@
 # H3 Camera validation
 
+## Local 0.5.0 anchors on Apply, automatic hold timing - 2026-10-06
+
+**Apply anchors views by default.** The main Apply button now generates and injects the keyframe views whenever the form allows (H3 Ref2VA, one Start Image, a keyframe matching a LoRA view, a host with the plugin generation API); otherwise it applies the text plan and states why. A first live build registered Apply without WanGP's session wrapper because its handler only reached the session through a helper; WanGP pumps the queue only for handlers whose own code uses the session, so view jobs would have stalled. The regression test that checks the native label-refresh chain caught it, and the handler now holds the session itself.
+
+**Automatic hold timing.** The panel watches the output folder while the page is open. For a new render whose stored prompt contains a one-hold camera plan, it measures the still interval, retimes the clip, re-measures the copy and publishes `<name>_timed_<id>.mp4`. Findings while building it:
+
+- Exact frame agreement was too strict. On seed 777001 the copy measured still from frame 122 instead of 121, because the camera eases into the hold and background motion crosses the 0.5 px threshold gradually (0.68, then 0.43 px). The retime maps the boundaries exactly; the independent re-check now allows one frame (1/fps).
+- Measured holds are frozen frames: mean whole-frame change 0.23-0.34 grey levels (maximum about 1.4) against 7.7-13.2 while moving, on both scenes. Frozen holds may now be shortened up to 10x (3x otherwise), and eased moves need 40% of frames moving (one eased start measured 51%).
+- When the camera settles on its final view early and the ending is frozen, the final move is stretched to end on the last frame if that stays within the movement limits; otherwise only the hold is corrected. Audio sections changed more than 4x are trimmed instead of tempo-squeezed.
+
+**Lingering at the hold.** Anchored renders often leave the hold late: about 0.2-2.7 s on the rooftop scene and up to 2.9 s on the robot scene. Two generation-side variants on robot seed 764485034 did not help: explicit departure wording ("Right after the hold, the camera starts moving again...") still held from 4.08 to 7.17 s, and anchoring only the hold's arrival removed the stop near the plan (still 5.5-6.8 s) and whipped the camera at the end (up to 36 px/frame). The two-sided hold anchor stays; timing is corrected afterwards. Renders that linger so long that the final move would need more than 2x slow motion are refused with a suggestion to try another seed.
+
+**Second scene.** The robot-workshop start frame (landscape 1280 x 704) with a different path: orbit 45 degrees **left** by 4.54 s at 0.9x, hold to 5.04 s, then continue left to 90 degrees while rising to 30 degrees. Views (`front-left quarter view eye-level shot medium shot`, `left side view elevated shot medium shot`) rendered at 1280 x 704 in 31 s.
+
+| Render | Seed | Path | Automatic timing |
+| --- | --- | --- | --- |
+| Anchored | 764485034 | Left to the three-quarter hold, then the elevated side profile | Corrected (hold 98-174 to 109-121; ending left unchanged, past the movement limit) |
+| Anchored | 708144286 | Same path | Corrected (hold 100-133 to 109-121) |
+| Anchored | 144618832 | Same path | Refused: lingered 3.8-7.7 s, final move would need 2.1x slow motion |
+| Text only | 144618832 | Reached nearly the side view by 4.54 s instead of 45 degrees; room, lighting and stool drifted | Not run |
+
+The generated side view replaced the robot's stool with a chair that has a backrest, and the anchored renders carry that object change into their last frames. Generated views can change objects; review them and change the view seed when needed.
+
+**Rooftop re-checks.** Automatic correction on earlier rooftop renders: the reported example (seed 144618832, hold 118-145) and live seed 777001 (hold 107-136, settled at frame 224) were corrected, the latter including the ending; seed 708144286 (lingered to 8.2 s) was refused.
+
+**Live UI.** WanGP was restarted with the plugin; a headless Chrome session loaded the user's preset, Start Image and reference, entered the scene and the reported path, pressed **Apply camera path to generation form** (views generated and applied in 45-53 s, status listing the anchored keyframes) and **Generate**. On the final build (seed 52026) the render took 410 s; within seconds the panel published the corrected copy and reported that the hold is on frames 122-134 and the final move ends on the last frame, with no page errors. Measured by background motion: the original left the hold at 6.83 s, was halfway through the final move at 8.04 s and stopped at 9.12 s; the corrected copy leaves at 5.58 s, is halfway at 7.88 s and stops at 9.96 s, against the planned 5.54 s, about 7.81 s and 10.08 s. An earlier live run (seed 777001) exposed the one-frame re-measurement issue described above.
+
+All 140 automated tests passed, including new tests for Apply with views (generation, cache reuse, stale-anchor replacement, text-only reasons, failure handling, streamed update dicts), plan parsing, automatic correction outcomes, the frozen ending and its fallback, audio trimming, the watcher and the timer tick.
+
+Evidence: `local_runtime/deepy_projects/h3_camera_scene2_20261006/` (scene, path, views, settings, prompts, `build.py`, key-frame sheets) and the rooftop folder's `eval/` and `live/` scripts; renders `D:/outputs/h3cam_scene2_{ANC,TXT,VA,VB}_s*_1006.mp4` and their `_timed_` copies.
+
 ## Local 0.4.0 generated view anchors - 2026-10-06
 
 After 0.3.0, a sixth render of the reported path (seed 144618832, live UI) still failed: it reached the subject's back by 5 s and ended on the far side profile (about 270 degrees). The failure reproduced frame-for-frame on the MCP worker, so later variants were compared on that seed. All renders used the user's Singularity preset as in 0.3.0 (Ref2VA Singularity v1.3 Pruned 20B, 12 steps, one phase, Euler, shift 6, INT8 ConvRot, First Block Cache 0.08 from 25%), 243 frames at 24 fps, 704 x 1280, with the same start/reference image and scene text.
