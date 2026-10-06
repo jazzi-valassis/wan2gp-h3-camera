@@ -4,7 +4,7 @@ A visual single-shot camera planner for MiniMax H3 in [WanGP / Wan2GP](https://g
 
 **Author and maintainer:** [Jazzi](https://github.com/jazzi-valassis)
 
-**Version:** 0.3.0 · **License:** [MIT](LICENSE) · **Plugin type:** extension
+**Version:** 0.4.0 · **License:** [MIT](LICENSE) · **Plugin type:** extension
 
 The plugin adds no model downloads or GPU allocations. Camera movement is prompt guidance: the diagram does not impose an exact 3D trajectory on the model. Optional timing tools use FFmpeg/FFprobe on PATH and WanGP's existing OpenCV, NumPy and Pillow packages.
 
@@ -16,6 +16,7 @@ The plugin adds no model downloads or GPU allocations. Camera movement is prompt
 - Portable JSON plans and optional closed-loop conditioning using the existing Start Image.
 - Elevation instructions describe physical camera movement, lens tilt, and the requested endpoint view.
 - Optional roll stabilization, explicit stationary holds, and a button to insert a half-second hold.
+- Generated view anchors: one click renders each keyframe view from the Start Image (Qwen Image Edit 2511 + Multiple-Angles LoRA) and injects it at the keyframe, so H3 lands on the planned side and height.
 - Native image anchors at both ends of a hold, with automatic Picture numbering and reference preservation.
 - Timed image checkpoints within a move, with pass-through instructions that do not add stops or alter the saved path.
 - Extract a checkpoint image directly from a reviewed video frame.
@@ -51,7 +52,7 @@ Enable **H3 Camera**, save settings, and restart WanGP as above.
 
 ### Install from a ZIP
 
-Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.3.0.zip`, run `python scripts/build_release.py`. Use the Git installation method for the latest source version; downloadable releases may lag behind main.
+Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.4.0.zip`, run `python scripts/build_release.py`. Use the Git installation method for the latest source version; downloadable releases may lag behind main.
 
 The final layout must be:
 
@@ -87,7 +88,7 @@ The repository root contains the plugin files directly, so the public URL can be
 
 ## Compatibility
 
-Version **0.3.0** is tested with the installed **WanGP v17.01**, host HEAD `0e58385fbde7ff102d276e4a9e490845de76b4ea` with existing local host edits, and **Gradio 5.29.0**. Image anchoring needs the native `shared.prompt_enhancer.images.window_contexts` and `resolve_injected_positions` helpers and an H3 Ref2VA model supporting Inject Frames. If those helpers are absent, the image-anchor buttons are disabled; ordinary prompt planning remains available when the other requested host APIs exist. Timing correction needs FFmpeg/FFprobe on PATH. Older releases are not certified for the new image workflow. See [VALIDATION.md](VALIDATION.md) for the exact local checks.
+Version **0.4.0** is tested with the installed **WanGP v17.01**, host HEAD `0e58385fbde7ff102d276e4a9e490845de76b4ea` with existing local host edits, and **Gradio 5.29.0**. Image anchoring needs the native `shared.prompt_enhancer.images.window_contexts` and `resolve_injected_positions` helpers and an H3 Ref2VA model supporting Inject Frames. If those helpers are absent, the image-anchor buttons are disabled; ordinary prompt planning remains available when the other requested host APIs exist. Timing correction needs FFmpeg/FFprobe on PATH. Older releases are not certified for the new image workflow. See [VALIDATION.md](VALIDATION.md) for the exact local checks.
 
 The plugin uses `WAN2GPPlugin`, component/global requests, `insert_after`, and `add_custom_js`, plus the installed frame scheduler, prompt parser and native image-label helper. These are WanGP dependencies, not additional files to ship. It does not patch the pipeline, launch another server, submit its own generation jobs, or import `h3cam_ref` or MiniMaxH3Mod.
 
@@ -127,6 +128,18 @@ For a **closed loop**, choose a path ending at its original camera pose (for exa
 If reference images are active, adding an End Image changes their H3 picture numbers. The plugin stops this operation with an explanation: first enable and fill the native End Image, then update the scene's picture labels (Start Image is Picture 1, End Image is Picture 2, other images follow). An already active, populated End Image keeps its existing position when replaced.
 
 Use **Camera path JSON and saved plans** to save or load portable `.json` plans. Saved plans include keyframes, scene-motion choice, interpolation, loop choice and roll stabilization. Older plans and bare keyframe arrays load with stabilization on. They do not overwrite the main scene prompt or duration. Bare keyframe arrays from the original editor are supported when they satisfy the normalized schema. The ordinary WanGP queue stores the compiled prompt and generation settings, so queued jobs do not need the planner to run.
+
+### Generated view anchors (recommended for orbits)
+
+Prompt wording cannot say which side of the subject an orbit should finish on, and some seeds circle past the subject's back to the far side. **Generate view anchors and apply camera path** gives H3 a picture of each target view instead:
+
+1. Select an H3 **Ref2VA** model and add exactly one active **Start Image**. Keep the identity reference in **Reference Images** if you use one.
+2. Plan the path. A keyframe gets a view when its orbit angle is within 5 degrees of a 45-degree step (±45, ±90, ±135, 180) and its elevation within 15 degrees of -30, 0, 30 or 60. The start view is never re-anchored (the Start Image already shows it). When several keyframes round to the same view, only the closest pose keeps it, together with its exact repeats (a hold): the same still at two different poses would read as a stop. Other keyframes keep text guidance only, so a dense path with a keyframe every second is anchored only at its exact views.
+3. Click **Generate view anchors and apply camera path**. The plugin queues one Qwen Image Edit Plus (2511) image per distinct keyframe view, rendered from the Start Image with fal's Multiple-Angles LoRA and the 8-step Lightning LoRA. It then injects each view at its keyframe frame (a hold shares one view at both ends), renumbers your `<Picture N>` labels and applies the camera path. Generate normally afterwards.
+
+The views use WanGP's normal queue, so they appear in the gallery and need the Media Generator tab to stay focused while they render (about 15-30 seconds per view plus a model switch). The model and both LoRAs download on first use. **View image seed** changes the generated views; apply again to replace them. Distances map to the LoRA's shot sizes (close-up at 0.6x or closer, wide at 1.6x or farther, medium otherwise), so the anchored framing is approximate and depends on how wide the Start Image is.
+
+Views are generated stills: they fix the camera side, height and the endpoint view, and they also fix the subject's pose and the background at those frames. Review them before generating; regenerate with another seed if a view is wrong.
 
 ### Image anchors for a camera hold
 

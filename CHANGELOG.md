@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 - 2026-10-06
+
+- Add **Generate view anchors and apply camera path**. It renders each keyframe view from the Start Image with Qwen Image Edit Plus (2511), fal's Multiple-Angles LoRA and the 8-step Lightning LoRA through WanGP's plugin generation API, injects the views at their keyframe frames, renumbers Picture labels and applies the camera path in one click.
+- Fixes the remaining orbit failure: with 0.3.0 wording, one seed in five (144618832) circled behind the subject and ended on the far side because "side view" does not say which side. With generated anchors, all five tested seeds, including that one, reached the planned high three-quarter hold and ended on the correct side profile.
+- Only keyframes the LoRA can show are anchored: orbit angles within 5 degrees of a 45-degree step and elevations within 15 degrees of -30, 0, 30 or 60. The start view is never re-anchored, and when several keyframes round to one view only the closest pose (with its exact repeats, a hold) keeps it, so a keyframe-every-second path is anchored only at its exact views instead of gaining false stops. A hold shares one view at both ends; existing references and injected frames are preserved.
+- Streamed button results are sent as update dicts so Gradio's generator diffs apply in the browser.
+- Ten new regressions cover pose-to-view mapping, wrapping and tolerances, start-view and shared-view rules, the keyframe-every-second path, resolutions, task settings, the queue-backed apply, failure handling and streamed output types. 126 tests pass.
+- Validated with eight anchored renders on the reported scene across five seeds, including the live UI button and a keyframe-every-second path; see VALIDATION.md.
+
 ## 0.3.0 - 2026-10-06
 
 - Fix spinning renders: a 90-degree orbit with a 48-degree rise produced a full orbit, a top-down view and a spin. The compiled plan no longer lists motions to avoid (orbit, roll, twisting, rotation, banking), mentions full turns, or names an overhead view unless the path reaches 75 degrees. A 48-degree view is no longer described as "above the subject".

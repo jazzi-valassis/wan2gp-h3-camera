@@ -7,7 +7,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SLUG = "wan2gp-h3-camera"
-FILES = ("__init__.py", "plugin.py", "plugin_info.json", "camera_plan.py", "editor.py", "image_anchors.py", "timing.py",
+FILES = ("__init__.py", "plugin.py", "plugin_info.json", "camera_plan.py", "editor.py", "image_anchors.py", "timing.py", "view_anchors.py",
          "README.md", "VALIDATION.md", "CHANGELOG.md", "LICENSE", "NOTICE.md", ".gitignore")
 DIRECTORIES = ("web", "tests", "scripts")
 

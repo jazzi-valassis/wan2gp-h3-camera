@@ -1,5 +1,34 @@
 # H3 Camera validation
 
+## Local 0.4.0 generated view anchors - 2026-10-06
+
+After 0.3.0, a sixth render of the reported path (seed 144618832, live UI) still failed: it reached the subject's back by 5 s and ended on the far side profile (about 270 degrees). The failure reproduced frame-for-frame on the MCP worker, so later variants were compared on that seed. All renders used the user's Singularity preset as in 0.3.0 (Ref2VA Singularity v1.3 Pruned 20B, 12 steps, one phase, Euler, shift 6, INT8 ConvRot, First Block Cache 0.08 from 25%), 243 frames at 24 fps, 704 x 1280, with the same start/reference image and scene text.
+
+Two text-only variants were rejected:
+
+| Variant | Seed 144618832 result |
+| --- | --- |
+| Views named by side ("seen from the right side of the opening frame"), a visibility bound and halfway milestones | Stopped at about 90 degrees and held, but orbited left: H3 read "right side" as the subject's right side |
+| Same bound and milestones without side names | Still passed behind the subject and ended on the far side |
+
+Words do not identify which side an orbit should end on. 0.4.0 therefore generates a still of each target view from the Start Image and injects it as an anchor. Views come from Qwen Image Edit Plus (2511) with fal's Multiple-Angles LoRA (`<sks> [azimuth] [elevation] [distance]`; its "right" matches the plugin's positive orbit) and the 8-step Lightning LoRA, CFG 1. Without Lightning the angle LoRA produced grainy, under-denoised views at 30 steps and at strength 0.6.
+
+| Anchored render (hold view at frames 122/134, side view at 243) | Seed | Result |
+| --- | --- | --- |
+| Reported path, scripted | 144618832 | Arcs right and up to the high three-quarter hold, holds, ends on the correct side profile |
+| Reported path, scripted | 764485034, 708144286, 315046792, 20261006 | Same path; 708144286 stays at the hold view until about 7.5 s, then descends late |
+| Reported path, live UI button then Generate | 144618832 | Views in 42 s, apply, 345 s render; same correct path as the scripted run |
+| Keyframe every second, anchored only at the hold and end | 708144286 | Correct path with steadier pacing: gradual rise to the hold and gradual descent to the end |
+| Reported path with a close-up end view (0.5x distance) | 144618832 | Same correct path; the end is pushed in like the planned 0.5x, so 0.5x now maps to close-up |
+
+Frame-difference checks found no visible pop at the injected frames: changes around frames 120-123 and 239-242 are below the clip median, and the hold frames are near-static (mean difference 0.04). Anchored stills also fix the subject's pose and background at those frames. Exact angles are approximate: the LoRA has 45-degree orbit steps and four heights, so the 48-degree hold uses its 60-degree "high-angle" view.
+
+The live test found a browser bug in the first implementation: progress messages sent gr.update() placeholders and the final message raw values, and Gradio's generator diffs then reached the Dataframe as a patch the browser could not apply (`Cannot read properties of undefined (reading 'length')`). The form fields updated but the status and views gallery did not. All streamed outputs are now update dicts; the next live run updated every output with no page errors. WanGP also suspends plugin-submitted jobs until a Media Generator tab has browser focus, so the views render only while that tab is focused.
+
+All 126 automated tests passed from source and from the extracted 0.4.0 ZIP, including ten view-anchor tests: pose-to-view mapping and tolerances, wrapping, start-view and shared-view rules, the keyframe-every-second path, resolutions, task settings, the queue-backed apply with Picture renumbering, failure handling and streamed output types.
+
+Evidence is in `local_runtime/deepy_projects/h3_camera_spin_20261006/` (`anchors/`, `eval/`, `anchor_settings.py`, the live-UI scripts under `live/`) and the renders `D:/outputs/h3cam_spin_{ANC,ANCdense,ANCclose,V2,V3}_s*_1006.mp4`. This is one scene and five seeds.
+
 ## Local 0.3.0 spin fix - 2026-10-06
 
 Report: a "simple" path rendered as a spinning shot. The path was a 45-degree orbit right while rising to elevation 48 and dollying to 0.75x by 5.041667 s, a 0.5 s hold, then another 45 degrees right while descending to eye level at 0.5x by 10.083333 s. The supplied clip rose to a top-down view, spun about the vertical axis and finished on the front view. Adding a keyframe every second did not help.

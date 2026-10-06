@@ -6,8 +6,10 @@ import re
 import subprocess
 from pathlib import Path
 import tempfile
+import time
 
 import gradio as gr
+from PIL import Image
 
 from shared.utils.frame_scheduler import normalize_frame_count
 from shared.utils.plugins import WAN2GPPlugin
@@ -17,11 +19,16 @@ try:
 except ImportError:
     window_contexts = None
     resolve_injected_positions = None
+try:
+    from shared.api import create_gradio_webui_session
+except ImportError:
+    create_gradio_webui_session = None
 
 from .camera_plan import DEFAULT_PATH, PRESETS, compile_plan, validate_path, keyframe_frame, strip_camera_plan
 from .editor import BRIDGE_JS, render_editor
 from .image_anchors import merge_timed_images
 from . import timing as camera_timing
+from . import view_anchors
 
 
 MAX_PLAN_BYTES = 64 * 1024
@@ -48,7 +55,7 @@ class H3CameraPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = "H3 Camera"
-        self.version = "0.3.0"
+        self.version = "0.4.0"
         self.type = ["extension"]
         self.description = "Visual single-shot camera paths for MiniMax H3"
 
@@ -60,6 +67,13 @@ class H3CameraPlugin(WAN2GPPlugin):
         self.request_global("PROMPT_TOOLS_ATTACH_JS")
         self.request_global("save_path")
         self.add_custom_js(f"({BRIDGE_JS})();")
+        # WanGP's plugin generation API renders the view anchors in the live queue.
+        self._wangp_session = None
+        if create_gradio_webui_session is not None:
+            try:
+                self._wangp_session = create_gradio_webui_session(self)
+            except Exception:
+                self._wangp_session = None
         self.insert_after("prompt", self.build_panel)
 
     def post_ui_setup(self, components):
@@ -127,6 +141,23 @@ class H3CameraPlugin(WAN2GPPlugin):
                         export_state = gr.State(value=None, delete_callback=self.cleanup_export)
             close_loop = gr.Checkbox(label="Close loop: reuse the selected Start Image as the End Image",
                                      value=False)
+            views_ready = self._wangp_session is not None and window_contexts is not None
+            with gr.Accordion("Generated view anchors (recommended for orbits)", open=True):
+                gr.Markdown("Text alone does not tell H3 which side to end on, so some seeds orbit past the subject's back. "
+                            "This renders a still of each keyframe view from the Start Image with Qwen Image Edit Plus (2511), "
+                            "the Multiple-Angles LoRA and the 8-step Lightning LoRA, then injects the views at their keyframe "
+                            "times and applies the camera path. Keyframes need orbit angles within 5 degrees of a 45-degree step "
+                            "and elevations near -30, 0, 30 or 60 degrees; other keyframes keep text guidance only. Requires an H3 Ref2VA model "
+                            "and one Start Image. Each view takes about 15-30 seconds plus a model switch; models and LoRAs "
+                            "download on first use. Views appear in the gallery. Keep the form unchanged until it finishes.")
+                with gr.Row():
+                    view_seed = gr.Number(label="View image seed", value=42, precision=0, minimum=0)
+                    generate_views = gr.Button("Generate view anchors and apply camera path", variant="primary",
+                                               interactive=views_ready)
+                views = gr.Gallery(label="Generated views", columns=4, height=260, interactive=False)
+                if not views_ready:
+                    gr.Markdown("This WanGP build lacks the plugin generation API or timed-image labels. Update WanGP to "
+                                "generate view anchors.")
             with gr.Accordion("Image anchors for a camera hold", open=False):
                 gr.Markdown("For H3 Ref2VA, choose an image showing the view the camera should hold. Use the same aspect ratio "
                             "as the Start Image: native injection takes its canvas from the first injected image. The button places it at both ends "
@@ -226,6 +257,26 @@ class H3CameraPlugin(WAN2GPPlugin):
                 inputs=[components[name] for name in ("state", "video_length", "force_fps", "video_guide", "video_source")],
                 outputs=components["video_length"], show_progress="hidden", api_name=False,
             ).then(fn=None, inputs=None, outputs=None, js=self.PROMPT_TOOLS_ATTACH_JS, api_name=False)
+            if self._wangp_session is not None:
+                try:
+                    with self._wangp_session.plugin_ui_context():
+                        generate_views.click(self.generate_view_anchors, inputs=[view_seed, *args],
+                                             outputs=[*[components[name] for name in FORM_OUTPUTS], table, compiled, status,
+                                                      *[components[name] for name in ANCHOR_OUTPUTS], views],
+                                             api_name="h3_camera_view_anchors")
+                except RuntimeError:
+                    # Hosts without the main WebUI queue bridge cannot run plugin generations.
+                    generate_views.interactive = False
+                # The wrapped click finishes in a follow-up event, so refresh labels when the views arrive.
+                views.change(
+                    self.refresh_prompt_labels,
+                    inputs=[components[name] for name in ("state", "multi_prompts_gen_type", "image_mode")],
+                    outputs=[components[name] for name in LABEL_OUTPUTS], show_progress="hidden", api_name=False,
+                ).then(
+                    self.refresh_video_length_label,
+                    inputs=[components[name] for name in ("state", "video_length", "force_fps", "video_guide", "video_source")],
+                    outputs=components["video_length"], show_progress="hidden", api_name=False,
+                ).then(fn=None, inputs=None, outputs=None, js=self.PROMPT_TOOLS_ATTACH_JS, api_name=False)
             upload.change(self.load_plan, inputs=upload, outputs=[path, motion, interpolation, close_loop, stabilize_roll])
             extract_checkpoint.click(self.extract_checkpoint, inputs=[checkpoint_video, checkpoint_source_frame],
                                      outputs=[checkpoint_image, extraction_status], api_name="h3_camera_extract_checkpoint")
@@ -494,6 +545,81 @@ class H3CameraPlugin(WAN2GPPlugin):
                 f" Movement checkpoint at {frame / initial['fps']:.6f}s (frame {frame+1}, 1-based). The camera path and its times are unchanged.")
         except (ValueError, TypeError, OverflowError) as error:
             raise gr.Error(str(error)) from error
+
+    @staticmethod
+    def _image_file(item):
+        """Return (path, size) for a native gallery item: a path, (path, caption), file dict or PIL image."""
+        if isinstance(item, (tuple, list)) and item:
+            item = item[0]
+        if isinstance(item, dict):
+            item = item.get("path") or (item.get("image") or {}).get("path")
+        if isinstance(item, (str, Path)) and Path(item).is_file():
+            with Image.open(item) as image:
+                return str(item), image.size
+        if isinstance(item, Image.Image):
+            target = Path(tempfile.mkdtemp(prefix="h3_camera_views_")) / "start.png"
+            item.save(target)
+            return str(target), item.size
+        raise gr.Error("The Start Image could not be read for view generation.")
+
+    def generate_view_anchors(self, seed, *args):
+        """Render keyframe views with Qwen Edit, inject them as anchors and apply the camera path."""
+        count = len(FORM_OUTPUTS) + 3 + len(ANCHOR_OUTPUTS) + 1
+        status_index = len(FORM_OUTPUTS) + 2
+
+        # Streamed results are sent as diffs against the previous yield, so every output stays an
+        # update dict: a raw value following gr.update() becomes a patch the browser cannot apply.
+        def status_only(message):
+            updates = [gr.update()] * count
+            updates[status_index] = gr.update(value=message)
+            return tuple(updates)
+
+        def as_updates(values):
+            return tuple(value if isinstance(value, dict) and value.get("__type__") == "update" else gr.update(value=value)
+                         for value in values)
+
+        if self._wangp_session is None:
+            raise gr.Error("This WanGP build lacks the plugin generation API needed for view anchors.")
+        values, initial = self._anchor_form(args)
+        try:
+            positions = self._injection_positions(values, initial)
+            seed = int(seed)
+            if seed < 0:
+                raise ValueError("Use a view image seed of 0 or more.")
+        except (ValueError, TypeError, OverflowError) as error:
+            raise gr.Error(str(error)) from error
+        targets, skipped = view_anchors.anchor_targets(initial["path"], initial["frame_count"], keyframe_frame)
+        if not targets:
+            raise gr.Error("No keyframe matches a view the Multiple-Angles LoRA can render. Use orbit angles in 45-degree "
+                           "steps and elevations near -30, 0, 30 or 60 degrees, or anchor images manually below.")
+        image_path, size = self._image_file(initial["image_start"][0])
+        prompts = list(dict.fromkeys(targets.values()))
+        tasks = view_anchors.view_tasks(prompts, image_path, view_anchors.view_resolution(*size), seed)
+        yield status_only(f"Generating {len(prompts)} view image(s) with Qwen Image Edit Plus (2511) in the WanGP queue...")
+        job = self._wangp_session.submit(tasks)
+        started = last = time.time()
+        while not job.done:
+            time.sleep(0.5)
+            if time.time() - last >= 5:
+                last = time.time()
+                yield status_only(f"Generating {len(prompts)} view image(s)... {int(last - started)}s elapsed.")
+        result = job.result(timeout=1.0)
+        if result.cancelled:
+            raise gr.Error("View generation was cancelled; the generation form is unchanged.")
+        files = list(result.generated_files or [])
+        if not result.success or len(files) != len(prompts):
+            errors = "; ".join(error.message for error in result.errors) or "the queue returned no images"
+            raise gr.Error(f"View generation failed ({errors}); the generation form is unchanged.")
+        images = dict(zip(prompts, files))
+        frames = sorted(targets)
+        description = (f" Generated view anchors at frames {' '.join(str(frame + 1) for frame in frames)} (1-based) "
+                       f"from {len(prompts)} Qwen Image Edit view(s), seed {seed}.")
+        if skipped:
+            description += (f" Keyframes {', '.join(map(str, skipped))} are between the LoRA's views and keep "
+                            "text guidance only.")
+        updates = self._apply_image_updates(values, initial, positions,
+                                            {frame: images[targets[frame]] for frame in frames}, description)
+        yield as_updates((*updates, [(images[prompt], prompt.replace("<sks> ", "")) for prompt in prompts]))
 
     @staticmethod
     def extract_checkpoint(video, frame):
