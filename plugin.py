@@ -71,7 +71,7 @@ class H3CameraPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = "H3 Camera"
-        self.version = "0.6.0"
+        self.version = "0.6.1"
         self.type = ["extension"]
         self.description = "Visual single-shot camera paths for MiniMax H3"
 
@@ -705,7 +705,10 @@ class H3CameraPlugin(WAN2GPPlugin):
                 pose = target["pose"]
                 chain += (pose,)
                 cached = cache.get(chain)
-                if cached and Path(cached).is_file():
+                if isinstance(cached, tuple):
+                    # This view missed its pose on an earlier Apply; the same seed would miss the same way.
+                    cached, got = None, cached[1]
+                elif cached and Path(cached).is_file():
                     got = yield from relay(run.reuse(cached, pose))
                 else:
                     # Re-render from a view at most MAX_STEP away: far targets first get helper views along the path.
@@ -716,20 +719,35 @@ class H3CameraPlugin(WAN2GPPlugin):
                         yield from relay(run.view(helper, f"helper view on the way to view {number} of {len(targets)}"))
                         previous = helper
                     cached, got = yield from relay(run.view(pose, f"view {number} of {len(targets)}"))
-                    cache[chain] = cached
+                    cache[chain] = cached or ("missed", got)
                 files.append(cached)
                 measured.append(got)
                 previous = pose
         finally:
             run.close()
-        frames = sorted(frame for target in targets for frame in target["frames"])
-        description = (f" Generated exact-pose view anchors at frames {' '.join(str(frame + 1) for frame in frames)} "
-                       f"(1-based), seed {seed}." + view_anchors.describe(targets, skipped, measured, fps))
-        additions = {frame: file for target, file in zip(targets, files) for frame in target["frames"]}
-        updates = self._apply_image_updates(values, initial, positions, additions, description)
+        kept = [(target, file, got) for target, file, got in zip(targets, files, measured) if file]
+        missed = [(target, got) for target, file, got in zip(targets, files, measured) if not file]
+        frames = sorted(frame for target, _, _ in kept for frame in target["frames"])
+        if kept:
+            description = (f" Generated exact-pose view anchors at frames {' '.join(str(frame + 1) for frame in frames)} "
+                           f"(1-based), seed {seed}." + view_anchors.describe([target for target, _, _ in kept], skipped,
+                                                                              [got for _, _, got in kept], fps))
+        else:
+            description = f" No generated view landed close enough to its pose to anchor (seed {seed})."
+        description += view_anchors.describe_missed(missed, fps)
+        additions = {frame: file for target, file, _ in kept for frame in target["frames"]}
         gallery = [(file, f"{', '.join(f'{frame / fps:.2f}s' for frame in sorted(target['frames']))}: "
                           f"{view_anchors.pose_label(target['pose'])} (measured {view_anchors.pose_label(got)})")
-                   for target, file, got in zip(targets, files, measured)]
+                   for target, file, got in kept]
+        if not additions and not positions:
+            # Nothing to inject: apply the plan as text, without the views an earlier Apply injected.
+            result = self._compile(*[values[name] for name in ANCHOR_INPUTS])
+            result["summary"] += description
+            anchors = (gr.update(value=values["image_refs"]), gr.update(value=values["frames_positions"]),
+                       gr.update(value=values["video_prompt_type"]), gr.update(), gr.update())
+            yield True, self._as_updates((*self._apply_result(result), *anchors, gallery))
+            return
+        updates = self._apply_image_updates(values, initial, positions, additions, description)
         yield True, self._as_updates((*updates, gallery))
 
     def _view_run(self, session, state, image_path, resolution, seed):
@@ -965,7 +983,8 @@ class _ViewRun:
         return got
 
     def view(self, pose, label):
-        """Render one view at ``pose``, re-aimed once past the miss if it lands too far. Returns (file, measured)."""
+        """Render one view at ``pose``, re-aimed once past the miss if it lands too far. Returns (file, measured);
+        file is None when both attempts miss."""
         attempts, aim = [], pose
         yield from self._prepare_source(pose)
         for attempt in range(2):
@@ -986,12 +1005,9 @@ class _ViewRun:
                 return file, got
             self.scene.drop_last()
             aim = view_anchors.aimed_pose(pose, got)
-        # Neither attempt met the tolerance: keep the closer one.
-        _, _, file, _ = min(attempts)
-        with Image.open(file) as view:
-            got = self.scene.add(view, pose)
-        self.files.append(file)
-        return file, got
+        # Neither attempt met the tolerance. H3 follows an injected view within a few degrees, so a view this far off
+        # would pull the render off the plan by as much; leave it out and let the text guide this pose.
+        return None, min(attempts)[3]
 
     def _render(self, task, what, first=None):
         job = self.session.submit([task])

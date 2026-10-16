@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1 - 2026-10-16
+
+0.6.0 (2026-10-07) was installed on the WanGP PC but never committed or released; its changes are listed here too.
+
+- **Exact-pose view anchors** (0.6.0). Views are no longer limited to the Multiple-Angles LoRA's 45-degree steps and four heights. Depth Anything 3 re-renders the Start Image, or the nearest view already made, from each keyframe's exact camera; Qwen Image 2.1 with the AnyAngle and Pruna 8-step LoRAs cleans the render up in the Start Image's style. The subject is painted out of the source first, so the moving camera sees background where it stood. Far targets are reached through helper views, every view is measured against the Start Image and re-aimed once if it misses, and moves longer than 2.6 seconds get pacing checkpoints so H3 cannot finish early and linger. When no browser tab relays the queue trigger, the plugin starts the view render on the server.
+- **Fix: a view that misses its pose is left out instead of injected.** 0.6.0 kept the closer of two missed attempts. For test 1 (a 45-degree orbit from a side-on rooftop start), both attempts at the end view measured 100 degrees, and the render cut to a different-looking scene in its last second. H3 follows injected views within a few degrees, so a view more than 15 degrees from the plan is now dropped after its re-aim. That keyframe keeps text guidance, the Apply status lists it with its closest measured pose, re-applying does not render it again, and when every view misses Apply falls back to the text plan and removes the views of the previous Apply.
+- Two new regressions (a missed end view on the reported path, and every view missing). 160 tests pass. Validated on the test-1 start, two seeds: see VALIDATION.md.
+- Known limitation: generated views can distort the subject (a smeared torso at the high-angle hold of test 1), and H3 copies the distortion at those frames. Review the views in the gallery and change the view seed when one is wrong.
+
 ## 0.5.0 - 2026-10-06
 
 - **Apply anchors views by default.** With an H3 Ref2VA model and a Start Image, Apply camera path generates and injects the keyframe views itself; the separate view-anchor button is gone. When views cannot be added, Apply still applies the text plan and the status ends with *Text guidance only* and the reason. The status lists which keyframes got which view.

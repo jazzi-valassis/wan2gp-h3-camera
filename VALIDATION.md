@@ -1,5 +1,31 @@
 # H3 Camera validation
 
+## Local 0.6.1 test 1 (45-degree orbit rendered as 80-90 degrees), missed views left out - 2026-10-16
+
+**Report.** Test 1 (a re-encoded 243-frame 704 x 1280 clip with no WanGP metadata, rendered on another machine) was planned as a 45-degree orbit from a side-on, high rooftop start. It ended face-on, about 80-90 degrees. None of the 3,189 renders in this PC's output folder matches its first frame, so its seed, path and plugin version are unknown. All renders below use the clip's first frame as the Start Image, the user's Singularity preset (Ref2VA Singularity v1.3 Pruned 20B, 12 steps, one phase, Euler, shift 6, INT8 ConvRot, First Block Cache 0.08 from 25%), 243 frames at 24 fps and 704 x 1280, with seeds 764485034 and 708144286.
+
+**Measuring angles.** Camera poses were measured with the plugin's own Depth Anything 3 registration (`view_geometry.Scene`), pairing each image or frame with the Start Image. Calibration: the Multiple-Angles LoRA's "front view elevated" and "right side view elevated" measured 0 and 85 degrees at +32 degrees up. Registration fails at about 0.3x the start distance and closer. Judging angles by eye was unreliable: in the LoRA views her body turns less than the camera.
+
+**Test 1's trajectory** measured 7, 15, 23, 33, **46** (at 5.04 s), 60, 78 and 96 degrees at 1-8 s, rising to +29 degrees and then descending to eye level. It never held.
+
+**0.5.0, text and anchors** (two path shapes ending at 45 degrees, text only and with 0.5.0's LoRA anchors, two seeds each): every render ended at 37-57 degrees. Anchored renders ended within 1-3 degrees of their anchor's measured pose. The LoRA reads view names relative to the input image (correct for side-on starts), but its high-angle and elevated quarter views measured 55-56 degrees, not 45. On the rise-hold-descend path the anchored renders therefore overshot to 55 degrees at the hold and swung back 15 degrees to the 40-degree end view.
+
+**The user's Oct 6 template ending at 90 degrees** (45 degrees at the hold, 90 at the end), text only: both seeds rose, never held, came back down and ended face-on (89 degrees and past 90), matching test 1. Test 1's path most likely ended at 90 degrees; this is not confirmed.
+
+**0.6.0's exact-pose views** on the 45-degree rise-hold-descend path (view seed 42): pacing checkpoint 22.5r 24u 0.875x measured 24.7r 29.3u 0.951x; hold 45r 48u 0.75x measured 46.9r 49.1u 0.755x; checkpoint 45r 24u 0.625x measured 47.8r 19.2u 0.554x; end 45r 0u 0.5x measured **100.4r** 10.5u on the first attempt and was worse after the re-aim (a different-looking scene with a tower and ladder, then the subject lying on the crate). 0.6.0 injected the closer attempt anyway.
+
+| Render | Seed | 2.5 s | 4 s | 5 s | 6 s | 7.9 s | 9.1 s | end | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.6.0 as installed | 764485034 | 26 | | 45 | 48 | 46 | | (no registration) | Holds at 45, then cuts to the bad end view's scene in the last second |
+| 0.6.1 | 764485034 | 25 | 46 | 46 | 47 | 46 | 50 | 53 | Same scene to the end; still from frames 100-149 (planned 121-133) |
+| 0.6.1 | 708144286 | 25 | 47 | 47 | 46 | 43 | 35 | 48 | Same scene to the end; still from frames 100-141 |
+
+With the missed end view left out, both seeds hold at 46-47 degrees and end at 48-53 degrees for a planned 45, with no cut. The views H3 copies still matter: the high-angle hold view smeared the subject's torso, and both renders reproduce that smear at frames 121-145. Their endings frame her tightly and stretch one leg, carried over from the 7.8 s checkpoint view.
+
+All 160 automated tests passed, including the two new ones.
+
+Evidence: `local_runtime/deepy_projects/h3_camera_test1_20261016/` (`FINDINGS.md`, `measure_pose.py`, `run060.py` which drives the plugin's real Apply with relayed view jobs, `build.py`, paths, prompts, settings, measurements and key-frame sheets); renders `D:/outputs/h3cam_test1_*_1016.mp4`.
+
 ## Local 0.5.0 anchors on Apply, automatic hold timing - 2026-10-06
 
 **Apply anchors views by default.** The main Apply button now generates and injects the keyframe views whenever the form allows (H3 Ref2VA, one Start Image, a keyframe matching a LoRA view, a host with the plugin generation API); otherwise it applies the text plan and states why. A first live build registered Apply without WanGP's session wrapper because its handler only reached the session through a helper; WanGP pumps the queue only for handlers whose own code uses the session, so view jobs would have stalled. The regression test that checks the native label-refresh chain caught it, and the handler now holds the session itself.

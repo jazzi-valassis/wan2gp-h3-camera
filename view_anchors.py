@@ -25,7 +25,8 @@ PACE_SECONDS = 2.6
 MIN_PACED_MOVE = 12.0
 # A view is re-rendered from an existing one; farther than this, a helper view is made in between.
 MAX_STEP = 50.0
-# Measured views farther than this from the plan are retried once with the aim corrected.
+# Measured views farther than this from the plan are retried once with the aim corrected, then left out:
+# H3 follows an injected view within a few degrees, so a view this far off steers the render off the plan.
 ACCEPT_GAP = 15.0
 
 
@@ -142,18 +143,29 @@ def is_generated_view(path):
     return isinstance(path, str) and path.replace("\\", "/").rsplit("/", 1)[-1].startswith(VIEW_PREFIX)
 
 
+def _target_text(target, fps):
+    when = " and ".join(f"{frame / fps:.2f}s" for frame in sorted(target["frames"]))
+    what = (f"keyframe{'s' if len(target['keyframes']) > 1 else ''} {', '.join(map(str, target['keyframes']))}"
+            if target["kind"] == "keyframe" else "pacing checkpoint")
+    return f"{what} at {when}: {pose_label(target['pose'])}"
+
+
 def describe(targets, skipped, measured, fps):
     """Plain summary of the anchored views for the Apply status; ``measured`` holds one pose per target."""
-    parts = []
-    for target, got in zip(targets, measured):
-        when = " and ".join(f"{frame / fps:.2f}s" for frame in sorted(target["frames"]))
-        what = (f"keyframe{'s' if len(target['keyframes']) > 1 else ''} {', '.join(map(str, target['keyframes']))}"
-                if target["kind"] == "keyframe" else "pacing checkpoint")
-        parts.append(f"{what} at {when}: {pose_label(target['pose'])} (measured {pose_label(got)})")
+    parts = [f"{_target_text(target, fps)} (measured {pose_label(got)})" for target, got in zip(targets, measured)]
     text = " Anchored views: " + "; ".join(parts) + "."
     if skipped:
         text += f" Keyframes {', '.join(map(str, skipped))} return to the start view, which the Start Image already shows."
     return text
+
+
+def describe_missed(missed, fps):
+    """Apply status text for views left out after both attempts missed; ``missed`` holds (target, measured) pairs."""
+    if not missed:
+        return ""
+    parts = [f"{_target_text(target, fps)} (closest attempt measured {pose_label(got)})" for target, got in missed]
+    return (f" Left out because neither attempt came within {ACCEPT_GAP:g} degrees of the plan, so text alone guides "
+            "these poses: " + "; ".join(parts) + ".")
 
 
 PLATE_PROMPT = ("Remove the main subject and everything it rests on. Fill the masked area with the empty background "

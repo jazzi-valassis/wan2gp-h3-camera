@@ -1,10 +1,10 @@
 {
     "name": "H3 Camera",
     "author": "Jazzi",
-    "version": "0.6.0",
+    "version": "0.6.1",
     "description": "Plan H3 camera moves, anchor exact-pose views of every keyframe and pacing checkpoint on Apply, and correct each render's hold timing automatically.",
     "type": ["extension"],
     "wan2gp_version": "17.01",
-    "date": "2026-10-07",
+    "date": "2026-10-16",
     "url": "https://github.com/jazzi-valassis/wan2gp-h3-camera"
 }

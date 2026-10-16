@@ -296,7 +296,7 @@ class ApplyWithViewAnchorsTests(unittest.TestCase):
         self.assertIsNotNone(self.scenes[0].plate)  # the Start Image's own plate
         self.assertEqual(sorted(self.scenes[0].plates), [1, 2, 3])
 
-    def test_a_missed_view_is_reaimed_once_and_the_closer_attempt_kept(self):
+    def test_a_missed_view_is_reaimed_once(self):
         self.plugin._wangp_session = session = FakeSession(self.folder.name)
         path = [pose(0, 0), pose(.2, 40), pose(1, 40)]
         FakeScene.misses = [(-20, 0, 1), (2, 0, 1)]
@@ -305,10 +305,50 @@ class ApplyWithViewAnchorsTests(unittest.TestCase):
         self.assertEqual([tasks[0]["seed"] for tasks in session.submissions], [42, 43])
         self.assertEqual(final["image_refs"]["value"][:2], [self.view("40r_0u_1x", 1)] * 2)
         self.assertEqual(self.scenes[0].measured, [(0.0, 0.0, 1.0), (42.0, 0.0, 1.0)])
-        # Both attempts miss: the closer one stays registered and anchored.
-        FakeScene.misses = [(-30, 0, 1), (25, 0, 1), (0, 0, 1)]
+
+    def test_a_view_that_misses_twice_is_left_out_and_text_guides_that_pose(self):
+        # Test 1 (2026-10-16): the end view of a 45-degree orbit measured 100 degrees on both attempts, and keeping
+        # the closer one would have steered H3 to a face-on ending. The other views still anchor their poses.
+        self.plugin._wangp_session = session = FakeSession(self.folder.name)
+        FakeScene.misses = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (55, 10, 1), (40, 8, 1)]
+        args = self.args()
+        final = self.apply(args)[-1]
+        self.assertEqual(len(session.submissions), 5)
+        self.assertEqual(final["frames_positions"]["value"], "61 122 134 189")
+        hold = self.view("45r_48u_0p75x")
+        self.assertEqual(final["image_refs"]["value"],
+                         [self.view("22p5r_24u_0p875x"), hold, hold, self.view("67p5r_24u_0p625x"), self.ref])
+        self.assertNotIn(self.view("90r_0u_0p5x"), final["image_refs"]["value"])
+        self.assertEqual(len(self.scenes[0].measured), 4)  # the missed view is not registered for later re-renders
+        summary = final["summary"]["value"]
+        self.assertIn("frames 61 122 134 189 (1-based)", summary)
+        self.assertIn("Left out because neither attempt came within 15 degrees of the plan, so text alone guides these "
+                      "poses: keyframe 4 at 10.08s: 90r 0u 0.5x (closest attempt measured 130r 8u 0.5x).", summary)
+        self.assertIn("It ends at eye level, on a side view of the subject.", final["prompt"]["value"])
+        self.assertEqual([view for view, _ in final["views"]["value"]],
+                         [self.view("22p5r_24u_0p875x"), hold, self.view("67p5r_24u_0p625x")])
+        # Re-applying the same path reuses the kept views and does not render the missed one again.
+        steps = self.apply(self.follow(args, final))
+        self.assertEqual(len(session.submissions), 5)
+        self.assertEqual(steps[-1]["frames_positions"]["value"], "61 122 134 189")
+        self.assertIn("Left out because neither attempt", steps[-1]["summary"]["value"])
+
+    def test_when_every_view_misses_the_plan_applies_as_text_and_drops_stale_views(self):
+        self.plugin._wangp_session = session = FakeSession(self.folder.name)
+        path = [pose(0, 0), pose(.2, 40), pose(1, 40)]
+        final = self.apply(self.args(path))[-1]
+        self.assertEqual(final["image_refs"]["value"][:2], [self.view("40r_0u_1x")] * 2)
+        FakeScene.misses = [(-30, 0, 1), (25, 0, 1)]
         final = self.apply(self.follow(self.args([pose(0, 0), pose(.2, 50), pose(1, 50)]), final))[-1]
-        self.assertEqual(final["image_refs"]["value"][:2], [self.view("50r_0u_1x", 1)] * 2)
+        self.assertEqual(len(session.submissions), 3)
+        self.assertEqual(final["image_refs"]["value"], [self.ref])
+        self.assertEqual(final["frames_positions"]["value"], "")
+        self.assertNotIn("F", final["video_prompt_type"]["value"])
+        summary = final["summary"]["value"]
+        self.assertIn("No generated view landed close enough to its pose to anchor (seed 42).", summary)
+        self.assertIn("keyframes 2, 3 at 2.00s and 10.08s: 50r 0u 1x (closest attempt measured 75r 0u 1x)", summary)
+        self.assertNotIn("<Picture", final["prompt"]["value"].split("Camera plan:", 1)[1])
+        self.assertEqual(final["views"]["value"], [])
 
     def test_far_targets_are_reached_through_helper_views(self):
         self.plugin._wangp_session = session = FakeSession(self.folder.name)
