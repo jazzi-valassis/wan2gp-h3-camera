@@ -17,9 +17,24 @@ import numpy as np
 DEPTH_MODEL = "depth/depth_anything_v3_vitl_bf16.safetensors"
 PROCESS_RES = 756  # Multiple of the model's 14-pixel patches.
 FAR = 50.0
-# Extra share of the target view the Start Image is credited with when choosing a source to re-render.
+# The Start Image is the source of every view it sees at least START_SHARE of. A generated view passes its
+# flaws on: in test 1 the end view re-rendered from the generated hold view (which covered two thirds of it)
+# broke up into a mosaic and then a different scene, while the same pose re-rendered from the Start Image,
+# covering about a quarter, came out clean and on target. Below that share, the view that sees most of the
+# target wins, the Start Image getting a START_BONUS head start.
+START_SHARE = 0.2
 START_BONUS = 0.1
 BACKGROUND = (60, 60, 60)
+# Largest splat radius in pixels (a point then covers up to 19 x 19 pixels).
+SPLAT_MAX = 10
+# A subject smaller than CARD_AREA of the frame is re-rendered as a flat card; from RELIEF_AREA up it keeps its
+# full depth relief, and in between part of it.
+CARD_AREA = 0.05
+RELIEF_AREA = 0.25
+# Pixels within CARD_REACH of the frame around the subject mask, and within CARD_DEPTH (log depth) of the
+# subject, belong to the subject's card.
+CARD_REACH = 0.03
+CARD_DEPTH = 0.12
 
 
 class DepthModel:
@@ -161,10 +176,32 @@ def expand_far(depth, near, far=FAR):
     return near / np.maximum((d - d0) / (1 - d0), 1 / (2 * far))
 
 
+def flatten_subject(depth, mask):
+    """Flatten a small subject toward its median depth. Across a person a few dozen pixels wide, monocular depth
+    is mostly noise; seen from a new angle that noise smears the body into streaks, and the editing model kept
+    them (a torso smeared across the crate it sat on). A flat card stays one coherent figure that the editing
+    model can turn. Large subjects have depth worth keeping and keep it."""
+    if mask is None or mask.shape != depth.shape or not mask.any():
+        return depth
+    relief = float(np.clip((mask.mean() - CARD_AREA) / (RELIEF_AREA - CARD_AREA), 0, 1))
+    if relief >= 1:
+        return depth
+    median = float(np.median(depth[mask]))
+    # The subject mask misses parts of a small figure (test 1: an outstretched thigh and the braid); left with
+    # their own depth, those smeared into a second figure lying beside her. Nearby pixels at her depth join the
+    # card, while the scenery behind her (another depth) keeps its own.
+    card = mask | (plate_mask(mask, CARD_REACH) & (np.abs(np.log(depth / median)) < CARD_DEPTH))
+    flat = depth.copy()
+    flat[card] = median + relief * (depth[card] - median)
+    return flat
+
+
 def point_cloud(image, depth, k, c2w=None, edge=0.08, only=None):
-    """World points, colours and source depths of one view. Points on depth edges are dropped: seen from
-    the side they would smear into streaks between foreground and background. ``only`` limits the cloud to
-    a pixel mask (a background plate contributes only where the subject stood)."""
+    """World points, colours, source depths and pixel spans of one view. Points on depth edges are dropped:
+    seen from the side they would smear into streaks between foreground and background. ``only`` limits the
+    cloud to a pixel mask (a background plate contributes only where the subject stood). A point's spans are
+    the 3D steps to its right and lower neighbours on the same surface (zero across a depth edge); the
+    renderer sizes each splat from them."""
     import torch
     device = "cuda" if torch.cuda.is_available() else "cpu"
     h, w = depth.shape
@@ -187,41 +224,54 @@ def point_cloud(image, depth, k, c2w=None, edge=0.08, only=None):
     grid = points.reshape(h, w, 3)
     step = max(1, min(h, w) // 64)
     outline = torch.cat([grid[0, ::step], grid[::step, -1], grid[-1].flip(0)[::step], grid[:, 0].flip(0)[::step]])
+    right, down = torch.zeros_like(grid), torch.zeros_like(grid)
+    right[:, :-1] = (grid[:, 1:] - grid[:, :-1]) * ((lz[:, 1:] - lz[:, :-1]).abs() < edge)[..., None]
+    down[:-1] = (grid[1:] - grid[:-1]) * ((lz[1:] - lz[:-1]).abs() < edge)[..., None]
+    spans = torch.stack([right.reshape(-1, 3), down.reshape(-1, 3)], 1)[keep]
     points, colors, source = points[keep], colors[keep], z.reshape(-1)[keep]
     if c2w is not None:
         m = torch.from_numpy(np.ascontiguousarray(c2w)).to(device)
         points = points @ m[:3, :3].T + m[:3, 3]
         outline = outline @ m[:3, :3].T + m[:3, 3]
-    return points, colors, source, (w, h), outline
+        spans = spans @ m[:3, :3].T
+    return points, colors, source, (w, h), outline, spans
 
 
 def render(cloud, k, rotation, centre, size, fill=True, layers=()):
     """Splat a point cloud, plus optional hidden ``layers`` behind it, into a camera with a z-buffer.
     Returns (RGB array, covered mask); the first cloud's frame outline bounds the gaps that get filled."""
     import torch
-    points, colors, source, source_size, outline = cloud
+    points, colors, source, source_size, outline, spans = cloud
     if layers:
         points = torch.cat([points, *[layer[0] for layer in layers]])
         colors = torch.cat([colors, *[layer[1] for layer in layers]])
         source = torch.cat([source, *[layer[2] for layer in layers]])
+        spans = torch.cat([spans, *[layer[5] for layer in layers]])
     device = points.device
     fx, fy, cx, cy = k
     r = torch.from_numpy(np.ascontiguousarray(rotation)).to(device)
     c = torch.from_numpy(np.ascontiguousarray(centre)).to(device)
     cam = (points - c) @ r
     front = cam[:, 2] > 1e-6
-    cam, colors, source = cam[front], colors[front], source[front]
+    cam, colors, source, spans = cam[front], colors[front], source[front], spans[front] @ r
     W, H = size
     scale = W / source_size[0]
     px = (cam[:, 0] / cam[:, 2] * fx + cx) * scale
     py = (cam[:, 1] / cam[:, 2] * fy + cy) * scale
+    # A point covers the pixels up to where its neighbours land. A floor seen nearly edge-on from the source
+    # spreads far apart when seen from above although its distance hardly changes; sized by distance alone,
+    # its splats left rows of dots that the editing model copied. At least 3x3, so surfaces stay closed.
+    z = cam[:, 2:3]
+    reach = [torch.hypot(fx * scale * (step[:, 0:1] / z - cam[:, 0:1] * step[:, 2:3] / z ** 2),
+                         fy * scale * (step[:, 1:2] / z - cam[:, 1:2] * step[:, 2:3] / z ** 2))[:, 0]
+             for step in (spans[:, 0], spans[:, 1])]
+    radius = torch.clamp(torch.ceil(torch.maximum(*reach) / 2 + .75), 2, SPLAT_MAX)
     # A point seen closer than in its source view covers more pixels.
-    # At least 3x3, so slightly stretched surfaces (oblique floors, a background plate) stay closed.
-    radius = torch.clamp(torch.ceil(source / cam[:, 2] * scale * 0.75), 2, 4).to(torch.int64)
+    radius = torch.maximum(radius, torch.clamp(torch.ceil(source / cam[:, 2] * scale * 0.75), 2, 4)).to(torch.int64)
     zbuf = torch.full((H * W,), float("inf"), device=device, dtype=torch.float64)
     best = torch.full((H * W,), -1, device=device, dtype=torch.int64)
     order = torch.arange(len(cam), device=device)
-    offsets = [(dx, dy) for dy in range(-3, 4) for dx in range(-3, 4)]
+    offsets = [(dx, dy) for dy in range(1 - SPLAT_MAX, SPLAT_MAX) for dx in range(1 - SPLAT_MAX, SPLAT_MAX)]
     for write in (False, True):
         for dx, dy in offsets:
             sel = radius > max(abs(dx), abs(dy))
@@ -307,9 +357,14 @@ class Scene:
         self.targets = [(0.0, 0.0, 1.0)]
         self.mask = mask
         self.plates = {}
+        self.subjects = {0: mask}
         self._history = []
         self._solve()
         self.set_plate(0, plate, plate_mask)
+
+    def set_subject(self, index, mask):
+        """Record a registered view's subject mask, so re-renders from it flatten the subject."""
+        self.subjects[index] = mask
 
     def set_plate(self, index, plate, plate_mask):
         """Give a registered view its background plate (the view with its subject painted out)."""
@@ -343,7 +398,8 @@ class Scene:
     def _cloud(self, source):
         pose = self.c2w[source]
         near = float((pose[:3, :3].T @ (self.pivot - pose[:3, 3]))[2])
-        return point_cloud(self.images[source], expand_far(self.depths[source], near), self.k[source], pose), near
+        depth = flatten_subject(self.depths[source], self.subjects.get(source))
+        return point_cloud(self.images[source], expand_far(depth, near), self.k[source], pose), near
 
     def coarse(self, target, size):
         """Coarse render of ``target`` (azimuth, elevation, distance) from the best registered view."""
@@ -361,8 +417,9 @@ class Scene:
         return Image.fromarray(image), source, float(covered.mean())
 
     def source_for(self, target, size=(256, 256)):
-        """The registered view that sees most of ``target``. The Start Image gets a START_BONUS head start:
-        it is the cleanest source, and re-rendering a generated view compounds that view's flaws."""
+        """The view to re-render ``target`` from: the Start Image when it sees at least START_SHARE of the target,
+        otherwise the registered view that sees most of it (the Start Image with a START_BONUS head start). The
+        Start Image is the cleanest source; re-rendering a generated view compounds that view's flaws."""
         rotation, centre = orbit(self.pivot, *target)
         width = min(size[0], 256)
         small = (width, max(1, round(size[1] * width / size[0])))
@@ -371,6 +428,10 @@ class Scene:
             if pose_gap(self.measured[index], target) > 120:
                 return -1.0
             _, covered = render(self._cloud(index)[0], self.k[0], rotation, centre, small, fill=False)
-            return float(covered.mean()) + (START_BONUS if index == 0 else 0.0)
+            return float(covered.mean())
 
-        return max(range(len(self.images)), key=score)
+        start = score(0)
+        if start >= START_SHARE or len(self.images) == 1:
+            return 0
+        scores = [start + START_BONUS, *[score(index) for index in range(1, len(self.images))]]
+        return max(range(len(self.images)), key=scores.__getitem__)

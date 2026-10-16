@@ -1,5 +1,29 @@
 # H3 Camera validation
 
+## Local 0.6.2 cleaner exact-pose views - 2026-10-16
+
+Same test-1 setup, path (45 degrees at a 48-degree hold, ending at eye level at 0.5x), preset and seeds as the 0.6.1 section below.
+
+**Cause of the distorted views.** The coarse re-renders that Qwen Image 2.1 + AnyAngle cleans up were mostly broken, and the editing model follows them closely. AnyAngle's reference input is a dense splat; ours had 21-29% coverage. The roof, seen nearly edge-on from the start, broke into rows of dots when the camera rose, because splats were sized by distance alone. The subject, about 30 x 60 pixels, smeared into streaks: across a figure that small, monocular depth is mostly noise. The hold view was also re-rendered from a generated view, and the crate's lit top landed on her torso. The 20-step, CFG 3 setting the LoRA card suggests was barely better than the 8-step Pruna setting on the same coarse render, so the speed setting stays.
+
+| Change | Effect on the coarse render | Effect on the view |
+| --- | --- | --- |
+| Splats sized by where neighbouring pixels land | Hold coverage 29% to 78%, 7.8 s view 26% to 66% | Closed roof, no dot rows |
+| Subject as a flat card, including nearby pixels at its depth the mask missed | One coherent figure instead of streaks | No smear, no ghost leg (the mask missed her thigh) |
+| Start Image as the source when it sees at least a fifth of the view | End view from the start instead of the generated hold view | End view on target instead of a mosaic and an invented scene |
+| Angle (15 degrees) and distance (30%) judged separately | n/a | A clean view framed 19% closer is no longer rejected |
+
+The Apply on test 1 (view seed 42) accepted all four views at the first attempt: 22.5r 24u 0.875x measured 25.2r 28.5u 1.017x; 45r 48u 0.75x measured 51.3r 53.2u 0.728x; 45r 24u 0.625x measured 48.5r 27.4u 0.657x; 45r 0u 0.5x measured 49.9r 0.8u 0.521x. 0.6.1 had rejected the end view and, before that, 0.6.0 had injected it at 100 degrees.
+
+| Render | Seed | 2.5 s | 4 s | 5 s | 6 s | 7.9 s | 9.1 s | end | Still frames |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.6.2 | 764485034 | 25 | 45 | 47 | 47 | 48 | 47 | 53 at eye level | 102-141 (planned 121-133) |
+| 0.6.2 | 708144286 | 25 | 46 | 48 | 49 | 47 | 47 | 55 at eye level | 102-145 |
+
+Both renders keep the subject intact through the move and end on a full eye-level framing of the same rooftop (0.6.1 cropped her and stretched a leg). Remaining artefacts: a faint flat shape beside the crate at the hold, and her braid as a blue streak on the roof (it lies outside the subject mask). H3 still reaches the hold early and leaves late, as in earlier versions; automatic hold timing corrects that.
+
+All 165 automated tests passed. Evidence: `local_runtime/deepy_projects/h3_camera_test1_20261016/` (`exp_coarse*.py`, `exp_source.py`, `C8_views.png`, `C9_views.png`, `C9_vs_C6fix.png`, `measure_C9_*.txt`); renders `D:/outputs/h3cam_test1_C9_s*_1016.mp4`.
+
 ## Local 0.6.1 test 1 (45-degree orbit rendered as 80-90 degrees), missed views left out - 2026-10-16
 
 **Report.** Test 1 (a re-encoded 243-frame 704 x 1280 clip with no WanGP metadata, rendered on another machine) was planned as a 45-degree orbit from a side-on, high rooftop start. It ended face-on, about 80-90 degrees. None of the 3,189 renders in this PC's output folder matches its first frame, so its seed, path and plugin version are unknown. All renders below use the clip's first frame as the Start Image, the user's Singularity preset (Ref2VA Singularity v1.3 Pruned 20B, 12 steps, one phase, Euler, shift 6, INT8 ConvRot, First Block Cache 0.08 from 25%), 243 frames at 24 fps and 704 x 1280, with seeds 764485034 and 708144286.

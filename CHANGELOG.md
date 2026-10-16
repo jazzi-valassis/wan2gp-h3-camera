@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.2 - 2026-10-16
+
+- **Cleaner exact-pose views.** On test 1's wide rooftop start, the coarse re-renders that the editing model cleans up were mostly broken: the roof turned into rows of dots, the small subject smeared into streaks, and the editing model copied both (a torso smeared across the crate, a stretched leg, an invented end scene). Three changes fix that:
+  - Splats are sized by where each pixel's neighbours land in the new view, not by distance alone, so a floor seen nearly edge-on stays closed when the camera rises above it (hold view coverage 29% to 78%).
+  - A small subject (under 5% of the frame, partial relief up to 25%) is re-rendered as a flat card at its median depth, including nearby pixels at its depth that the subject mask missed (an outstretched thigh), so it stays one coherent figure.
+  - The Start Image is the source of every view it sees at least a fifth of. The end view re-rendered from the generated hold view broke up into a mosaic; from the Start Image it came out clean and on target.
+- A view is now accepted when its angle is within 15 degrees and its distance within 30% of the plan, judged separately. One combined score rejected a clean view that was right in angle but framed 19% closer.
+- On test 1, all four views were accepted at the first attempt (measured 25, 51, 48 and 50 degrees for 22.5, 45, 45 and 45). See VALIDATION.md.
+- Five new regressions (oblique surface coverage, the card, its reach, source choice, the acceptance rule). 165 tests pass.
+
 ## 0.6.1 - 2026-10-16
 
 0.6.0 (2026-10-07) was installed on the WanGP PC but never committed or released; its changes are listed here too.

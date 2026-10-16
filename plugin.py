@@ -71,7 +71,7 @@ class H3CameraPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = "H3 Camera"
-        self.version = "0.6.1"
+        self.version = "0.6.2"
         self.type = ["extension"]
         self.description = "Visual single-shot camera paths for MiniMax H3"
 
@@ -962,13 +962,15 @@ class _ViewRun:
             return picture.convert("RGB").resize(self.size), grown
 
     def _prepare_source(self, pose):
-        """A generated view about to be re-rendered gets its own background plate first."""
+        """A generated view about to be re-rendered gets its subject mask (for the flat card) and its own
+        background plate first."""
         source = self.scene.source_for(pose, self.size)
-        if source == 0 or source in self.scene.plates:
+        if source == 0 or source in self.scene.subjects:
             return
         image = self.scene.images[source]
-        plate, grown = yield from self._plate(self.files[source], image, view_geometry.subject_mask(image),
-                                              "the nearest generated view")
+        mask = view_geometry.subject_mask(image)
+        self.scene.set_subject(source, mask)
+        plate, grown = yield from self._plate(self.files[source], image, mask, "the nearest generated view")
         self.scene.set_plate(source, plate, grown)
 
     def nearest(self, pose):
@@ -1000,7 +1002,7 @@ class _ViewRun:
             with Image.open(file) as view:
                 got = self.scene.add(view, pose)
             attempts.append((view_anchors.pose_gap(got, pose), attempt, file, got))
-            if attempts[-1][0] <= view_anchors.ACCEPT_GAP:
+            if view_anchors.accepted(got, pose):
                 self.files.append(file)
                 return file, got
             self.scene.drop_last()

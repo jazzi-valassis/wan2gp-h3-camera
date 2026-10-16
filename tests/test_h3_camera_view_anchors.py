@@ -80,6 +80,16 @@ class ViewTargetTests(unittest.TestCase):
         aimed = views.aimed_pose((67.5, 24, .625), (57.5, 22, .68))
         self.assertEqual([round(x, 4) for x in aimed], [77.5, 26.0, round(.625 * .625 / .68, 4)])
 
+    def test_a_view_is_judged_on_its_angle_and_its_distance_separately(self):
+        # Test 1: a clean view measured 20.3r 20.1u 0.711x for a 22.5r 24u 0.875x plan, right in angle but framed
+        # 19% closer; one combined score rejected it.
+        self.assertTrue(views.accepted((20.3, 20.1, .711), (22.5, 24, .875)))
+        self.assertTrue(views.accepted((42, 50.3, .884), (45, 48, .75)))
+        self.assertFalse(views.accepted((100.4, 10.5, .501), (45, 0, .5)))
+        self.assertFalse(views.accepted((-11, -6.9, 1.33), (45, 0, .5)))
+        self.assertFalse(views.accepted((45, 0, .7), (45, 0, .5)))  # 40% farther
+        self.assertTrue(views.accepted((-178, 0, 1), (179, 0, 1)))  # orbit angles wrap
+
     def test_labels_names_and_task(self):
         self.assertEqual(views.pose_label((45, 48, .75)), "45r 48u 0.75x")
         self.assertEqual(views.pose_label((-22.5, -10, 1.2)), "22.5l 10d 1.2x")
@@ -115,6 +125,7 @@ class FakeScene:
     def __init__(self, model, start, mask=None, plate=None, plate_mask=None):
         self.measured, self.aims, self.images, self.plates, self.sources = [(0.0, 0.0, 1.0)], [], [start], {}, []
         self.mask, self.plate, self.plate_mask = mask, plate, plate_mask
+        self.subjects = {0: mask}
 
     def source_for(self, target, size=None):
         if views.pose_gap(self.measured[0], target) <= 55:
@@ -124,6 +135,9 @@ class FakeScene:
     def set_plate(self, index, plate, plate_mask):
         if plate is not None:
             self.plates[index] = plate
+
+    def set_subject(self, index, mask):
+        self.subjects[index] = mask
 
     def coarse(self, aim, size):
         self.aims.append(tuple(aim))
@@ -295,6 +309,8 @@ class ApplyWithViewAnchorsTests(unittest.TestCase):
         self.assertEqual(self.scenes[0].sources, [0, 1, 2, 3])
         self.assertIsNotNone(self.scenes[0].plate)  # the Start Image's own plate
         self.assertEqual(sorted(self.scenes[0].plates), [1, 2, 3])
+        # Each re-rendered view's subject is recorded too, so it is flattened like the Start Image's.
+        self.assertEqual(sorted(self.scenes[0].subjects), [0, 1, 2, 3])
 
     def test_a_missed_view_is_reaimed_once(self):
         self.plugin._wangp_session = session = FakeSession(self.folder.name)
@@ -322,7 +338,7 @@ class ApplyWithViewAnchorsTests(unittest.TestCase):
         self.assertEqual(len(self.scenes[0].measured), 4)  # the missed view is not registered for later re-renders
         summary = final["summary"]["value"]
         self.assertIn("frames 61 122 134 189 (1-based)", summary)
-        self.assertIn("Left out because neither attempt came within 15 degrees of the plan, so text alone guides these "
+        self.assertIn("Left out because neither attempt came within 15 degrees and 30% distance of the plan, so text alone guides these "
                       "poses: keyframe 4 at 10.08s: 90r 0u 0.5x (closest attempt measured 130r 8u 0.5x).", summary)
         self.assertIn("It ends at eye level, on a side view of the subject.", final["prompt"]["value"])
         self.assertEqual([view for view, _ in final["views"]["value"]],

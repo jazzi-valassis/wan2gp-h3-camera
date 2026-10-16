@@ -25,9 +25,20 @@ PACE_SECONDS = 2.6
 MIN_PACED_MOVE = 12.0
 # A view is re-rendered from an existing one; farther than this, a helper view is made in between.
 MAX_STEP = 50.0
-# Measured views farther than this from the plan are retried once with the aim corrected, then left out:
-# H3 follows an injected view within a few degrees, so a view this far off steers the render off the plan.
+# A measured view whose orbit and height miss the plan by more than ACCEPT_GAP degrees, or whose distance is off
+# by more than the ACCEPT_DISTANCE ratio, is retried once with the aim corrected, then left out: H3 follows an
+# injected view within a few degrees, so a view this far off steers the render off the plan. Distance is judged
+# on its own because a view framed 20% closer only shifts the push-in, and folded into one score it rejected
+# views whose angle was right.
 ACCEPT_GAP = 15.0
+ACCEPT_DISTANCE = 1.3
+
+
+def accepted(measured, target):
+    """Whether a measured view is close enough to its planned pose to anchor it."""
+    turn = (measured[0] - target[0] + 180) % 360 - 180
+    ratio = measured[2] / target[2]
+    return math.hypot(turn, measured[1] - target[1]) <= ACCEPT_GAP and max(ratio, 1 / ratio) <= ACCEPT_DISTANCE
 
 
 def pose_of(keyframe):
@@ -164,8 +175,8 @@ def describe_missed(missed, fps):
     if not missed:
         return ""
     parts = [f"{_target_text(target, fps)} (closest attempt measured {pose_label(got)})" for target, got in missed]
-    return (f" Left out because neither attempt came within {ACCEPT_GAP:g} degrees of the plan, so text alone guides "
-            "these poses: " + "; ".join(parts) + ".")
+    return (f" Left out because neither attempt came within {ACCEPT_GAP:g} degrees and {round(100 * (ACCEPT_DISTANCE - 1))}% "
+            "distance of the plan, so text alone guides these poses: " + "; ".join(parts) + ".")
 
 
 PLATE_PROMPT = ("Remove the main subject and everything it rests on. Fill the masked area with the empty background "

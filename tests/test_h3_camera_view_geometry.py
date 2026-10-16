@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
@@ -111,10 +112,60 @@ class RenderTests(unittest.TestCase):
     def test_a_thin_near_post_survives_the_depth_edge_filter(self):
         depth = np.full((64, 64), 9.0)
         depth[:, 31:33] = 3.0  # a two-pixel post in front of a far wall
-        points, colors, source, size, outline = geometry.point_cloud(stripes(), depth, K)
+        points, colors, source, size, outline, spans = geometry.point_cloud(stripes(), depth, K)
+        self.assertEqual(tuple(spans.shape), (len(points), 2, 3))
         self.assertTrue(bool(((source - 3.0).abs() < 1e-9).sum() >= 64))
         self.assertEqual(size, (64, 64))
         self.assertEqual(outline.shape[1], 3)
+
+    def test_an_oblique_surface_stays_closed_when_seen_face_on(self):
+        # Test 1 (2026-10-16): a rooftop seen nearly edge-on from the start broke into rows of dots when the camera
+        # rose above it, because splats were sized by distance alone. Sized by where neighbouring pixels land,
+        # the surface stays closed; with the spans zeroed (distance sizing only) it does not.
+        import cv2
+        rows = (np.arange(64)[:, None] + .5 - 32) / 100
+        cloud = geometry.point_cloud(Image.new("RGB", (64, 64), "gray"), (5 / (1 - 2.5 * rows)) * np.ones((64, 64)), K)
+        camera = geometry.orbit(np.array([0.0, 0.0, 5.0]), 0, -60, 1)
+
+        def closed(cloud):
+            covered = geometry.render(cloud, K, *camera, (128, 128), fill=False)[1]
+            hull = cv2.convexHull(np.argwhere(covered)[:, ::-1].astype(np.int32))
+            inside = np.zeros(covered.shape, np.uint8)
+            cv2.fillPoly(inside, [hull], 1)
+            return float(covered[inside.astype(bool)].mean())
+
+        self.assertGreater(closed(cloud), .98)
+        self.assertLess(closed((*cloud[:5], cloud[5] * 0)), .7)
+
+    def test_a_small_subject_is_flattened_to_a_card_and_a_large_one_keeps_its_relief(self):
+        depth = np.full((100, 100), 9.0)
+        depth[40:60, 40:50] = np.linspace(2.0, 4.0, 10)  # 2% of the frame, depth 2-4
+        small = np.zeros((100, 100), bool)
+        small[40:60, 40:50] = True
+        flat = geometry.flatten_subject(depth, small)
+        self.assertTrue(np.allclose(flat[small], np.median(depth[small])))
+        self.assertTrue(np.array_equal(flat[~small], depth[~small]))
+        large = np.zeros((100, 100), bool)
+        large[10:90, 20:80] = True  # 48% of the frame
+        self.assertIs(geometry.flatten_subject(depth, large), depth)
+        middle = np.zeros((100, 100), bool)
+        middle[25:75, 35:65] = True  # 15% of the frame: half its relief
+        relief = geometry.flatten_subject(depth, middle)
+        median = np.median(depth[middle])
+        self.assertTrue(np.allclose(relief[middle] - median, .5 * (depth[middle] - median)))
+        self.assertIs(geometry.flatten_subject(depth, None), depth)
+
+    def test_parts_the_mask_missed_join_the_card_but_the_scenery_behind_does_not(self):
+        depth = np.full((200, 200), 9.0)  # the card reaches 3% of the frame (3 pixels) beyond the mask
+        depth[40:60, 40:50] = np.linspace(2.0, 4.0, 10)
+        depth[55:60, 50:53] = 3.2  # an outstretched leg next to the mask, at the subject's depth
+        mask = np.zeros((200, 200), bool)
+        mask[40:60, 40:50] = True
+        flat = geometry.flatten_subject(depth, mask)
+        median = np.median(depth[mask])
+        self.assertTrue(np.allclose(flat[55:60, 50:53], median))
+        self.assertTrue(np.allclose(flat[45:50, 50:53], 9.0))  # wall right beside her, far behind
+        self.assertTrue(np.allclose(flat[0:20], 9.0))
 
     def test_the_pivot_sits_on_a_thin_subject_rather_than_the_wall_behind_it(self):
         depth = np.full((64, 64), 9.0)
@@ -156,6 +207,19 @@ class SceneTests(unittest.TestCase):
         self.assertEqual((image.size, source), ((64, 64), 0))
         self.assertGreater(coverage, .5)
 
+
+    def test_the_start_image_is_the_source_while_it_sees_enough_of_the_view(self):
+        # Test 1: the end view re-rendered from the generated hold view (which saw two thirds of it) broke up,
+        # while the Start Image, seeing about a quarter, gave a clean view on target.
+        scene = geometry.Scene(FakeDepth(), stripes())
+        scene.add(stripes(), (2, 0, 1))
+        coverage = {0: .25, 1: .9}
+        with patch.object(geometry, "render", side_effect=lambda cloud, *args, **kwargs: (None, np.full((4, 4), coverage[cloud]))),                 patch.object(scene, "_cloud", side_effect=lambda index: (index, 0.0)):
+            self.assertEqual(scene.source_for((40, 0, 1)), 0)
+            coverage[0] = .15  # too little of the view: the view that sees most of it wins
+            self.assertEqual(scene.source_for((40, 0, 1)), 1)
+            coverage[1] = .2  # unless the Start Image is close behind (START_BONUS)
+            self.assertEqual(scene.source_for((40, 0, 1)), 0)
 
 if __name__ == "__main__":
     unittest.main()
