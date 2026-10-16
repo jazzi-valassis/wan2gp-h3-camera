@@ -1,5 +1,36 @@
 # H3 Camera validation
 
+## Local 0.6.3 support kept in the plate, views kept in order - 2026-10-17
+
+Same test-1 setup, path, preset and seeds as the 0.6.2 section below.
+
+**Artefacts at the hold.** 0.6.2's hold view showed a flat ghost lid beside the crate: the plate painted out the crate with the subject, the bare floor there was then seen from above, and the editing model drew a lid on it. Five variants were compared on the coarse renders and views:
+
+| Plate and support handling | Result |
+| --- | --- |
+| Support painted out, crate in the subject's card (0.6.2) | One crate, ghost lid beside it |
+| Support kept, crate in the card and in the plate layer | Clean hold, but two crates in the 7.8 s and end views |
+| Support kept, crate on its own depth | A row of two to four crates (its depth is as noisy as the subject's) |
+| Support kept, crate as its own plane-fitted card | The subject floats beside the crate |
+| **Support kept, crate in the card, left out of the plate layer (0.6.3)** | One crate with the subject seated on it in every view, no lid |
+
+The support is found from the plate's depth: inside the subject mask, the plate shows either the kept support at the subject's depth or newly painted scenery much farther back. A difference matte and rembg on the plate were tried first and failed (dark clothing matched the dark wall; the plate's salient object was the vent housing).
+
+**Ordering.** With checkpoints every 1.3 s, a 45-degree hold view measured 34.6 after the 38-degree checkpoint measured 41.3: within tolerance, but H3 would have turned back. A view is now also re-aimed when it is nearer a neighbour's planned pose than its own; the re-aimed hold measured 41.1.
+
+**Denser pacing does not fix hold timing.** Checkpoints every 1.3 s (eight views) on both seeds: H3 still reached the hold pose about 1 s early (41 degrees at 3.8 s), held longer (frames 99-145 and 101-156) and stopped and started at the extra checkpoints during the descent. Pacing stays at 2.6 s; the automatic hold timing corrects the timing after rendering.
+
+**Final renders** (all four views accepted at the first attempt: 24.8r 28.5u 0.962x, 43.9r 51.5u 0.802x, 43.3r 25.6u 0.787x, 42.4r 1.2u 0.559x):
+
+| Render | Seed | 2.5 s | 4 s | 5 s | 6 s | 7.9 s | 9.1 s | end | Still frames |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.6.3 | 764485034 | 25 | 43 | 43 | 43 | 44 | 44 | 40 at eye level | 102-141 |
+| 0.6.3 | 708144286 | 25 | 43 | 43 | 43 | 41 | 45 | 44 at eye level | 102-145 |
+
+Both stay within 6 degrees of the plan throughout, with one crate and the subject seated on it. The ghost lid is gone, but the hold view (view seed 42) added a short glowing plank beside the crate that both renders carry through the hold; her braid is drawn across the roof. These props come from the editing model and vary with the view seed; the exp views from the same coarse renders without the joint registration had neither.
+
+All 168 automated tests passed. Evidence: `local_runtime/deepy_projects/h3_camera_test1_20261016/` (`exp_support*.py`, `exp/support_*.png`, `C12_views.png` to `C14_views.png`, `joint_views.png`, `C14_vs_C9.png`); renders `D:/outputs/h3cam_test1_C1[0-4]_s*_1016.mp4`.
+
 ## Local 0.6.2 cleaner exact-pose views - 2026-10-16
 
 Same test-1 setup, path (45 degrees at a 48-degree hold, ending at eye level at 0.5x), preset and seeds as the 0.6.1 section below.

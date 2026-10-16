@@ -221,5 +221,30 @@ class SceneTests(unittest.TestCase):
             coverage[1] = .2  # unless the Start Image is close behind (START_BONUS)
             self.assertEqual(scene.source_for((40, 0, 1)), 0)
 
+    def test_the_plate_marks_what_the_subject_sits_on_as_its_support(self):
+        # Test 1: the plate kept the crate. At the subject's depth in the plate it is the support; where the plate
+        # shows the wall behind the subject (much farther), the pixels stay part of the subject.
+        class PlateDepth(FakeDepth):
+            def reconstruct(self, images):
+                depths, poses, k = super().reconstruct(images)
+                if len(images) == 2:
+                    depths[1][:40] = 12.0  # behind the person: painted-in wall
+                return depths, poses, k
+
+        mask = np.zeros((64, 64), bool)
+        mask[10:60, 20:44] = True
+        plate_mask = geometry.plate_mask(mask)
+        scene = geometry.Scene(PlateDepth(), stripes(), mask, stripes(), plate_mask)
+        support = scene.supports[0]
+        self.assertFalse(support[10:40].any())
+        self.assertTrue(support[40:60, 20:44].all())
+        # The card already draws the support, so the plate layer covers only the rest of the subject's area.
+        calls = []
+        real = geometry.point_cloud
+        with patch.object(geometry, "point_cloud", side_effect=lambda *args, **kwargs: calls.append(kwargs.get("only")) or real(*args, **kwargs)):
+            scene.coarse((10, 0, 1), (64, 64))
+        layer = next(only for only in calls if only is not None)
+        self.assertTrue(np.array_equal(layer, plate_mask & ~support))
+
 if __name__ == "__main__":
     unittest.main()

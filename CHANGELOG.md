@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.3 - 2026-10-17
+
+- **The background plate keeps what the subject sits or stands on.** It used to paint the support out with the subject; seen from above, the bare floor left where test 1's crate stood came back as a flat ghost lid beside her. The plate now keeps the support (the prompt says so), the plate's depth identifies it (the part of the subject's area that the plate shows at the subject's depth), and the plate layer leaves it out, because the subject's card already draws it. Drawing it from both, or giving it its own depth or its own card, produced two crates, a row of crates, or the subject floating beside the crate.
+- **A view must not land behind its neighbours.** A view is now also re-aimed when it measures nearer the pose planned before or after it than its own; with checkpoints a few degrees apart, a view within tolerance could otherwise make H3 turn back between them (test 1: a 45-degree hold view measured 34.6 after a 38-degree checkpoint measured 41.3).
+- Pacing checkpoints stay 2.6 seconds apart. Every 1.3 seconds they did not stop H3 reaching the hold about a second early, and H3 stopped and started at the extra checkpoints (two seeds). Hold timing is corrected after rendering by the automatic hold timing.
+- Three new regressions (the support found from the plate's depth and left out of the plate layer, the neighbour check in acceptance and in Apply). 168 tests pass.
+- Known limit: the editing model can still add a small prop (a plank beside the crate in one test-1 view) or draw long hair across the floor; this varies with the view seed.
+
 ## 0.6.2 - 2026-10-16
 
 - **Cleaner exact-pose views.** On test 1's wide rooftop start, the coarse re-renders that the editing model cleans up were mostly broken: the roof turned into rows of dots, the small subject smeared into streaks, and the editing model copied both (a torso smeared across the crate, a stretched leg, an invented end scene). Three changes fix that:

@@ -34,11 +34,19 @@ ACCEPT_GAP = 15.0
 ACCEPT_DISTANCE = 1.3
 
 
-def accepted(measured, target):
-    """Whether a measured view is close enough to its planned pose to anchor it."""
-    turn = (measured[0] - target[0] + 180) % 360 - 180
+def _angle_gap(a, b):
+    return math.hypot((a[0] - b[0] + 180) % 360 - 180, a[1] - b[1])
+
+
+def accepted(measured, target, neighbours=()):
+    """Whether a measured view is close enough to its planned pose to anchor it. It must also lie nearer its own
+    pose than the planned poses of the views before and after it: with checkpoints a few degrees apart, a view
+    within tolerance can still land behind the one before it (test 1: a 45-degree hold view measured 34.6 after a
+    38-degree checkpoint measured 41.3), and H3 would turn back between them."""
     ratio = measured[2] / target[2]
-    return math.hypot(turn, measured[1] - target[1]) <= ACCEPT_GAP and max(ratio, 1 / ratio) <= ACCEPT_DISTANCE
+    own = _angle_gap(measured, target)
+    return (own <= ACCEPT_GAP and max(ratio, 1 / ratio) <= ACCEPT_DISTANCE
+            and all(own <= _angle_gap(measured, other) for other in neighbours))
 
 
 def pose_of(keyframe):
@@ -179,8 +187,13 @@ def describe_missed(missed, fps):
             "distance of the plan, so text alone guides these poses: " + "; ".join(parts) + ".")
 
 
-PLATE_PROMPT = ("Remove the main subject and everything it rests on. Fill the masked area with the empty background "
-                "of the same scene, continuing the floor, walls and distant details seamlessly, with matching light and texture.")
+# What the subject sits or stands on stays in the plate. Painted out with the subject, it left bare floor where a
+# crate stood; seen from above, the editing model drew a flat ghost lid there beside the crate in the subject's
+# card. Kept (and left out of the plate layer, see view_geometry.Scene.set_plate), that area stays unknown and the
+# editing model completes the crate instead.
+PLATE_PROMPT = ("Remove the main subject. Keep whatever it sits or stands on and every other object exactly where they are. "
+                "Fill the area behind the subject with the empty background of the same scene, continuing the walls, floor "
+                "and distant details seamlessly, with matching light and texture.")
 
 
 def plate_task(image_path, mask_path, resolution, seed, name):

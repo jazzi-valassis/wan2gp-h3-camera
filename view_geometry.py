@@ -180,7 +180,9 @@ def flatten_subject(depth, mask):
     """Flatten a small subject toward its median depth. Across a person a few dozen pixels wide, monocular depth
     is mostly noise; seen from a new angle that noise smears the body into streaks, and the editing model kept
     them (a torso smeared across the crate it sat on). A flat card stays one coherent figure that the editing
-    model can turn. Large subjects have depth worth keeping and keep it."""
+    model can turn. Large subjects have depth worth keeping and keep it. What the subject sits on stays in the
+    card: on its own depth, or as a separate card, it came apart from the subject (a row of crates, or the
+    subject floating beside the crate)."""
     if mask is None or mask.shape != depth.shape or not mask.any():
         return depth
     relief = float(np.clip((mask.mean() - CARD_AREA) / (RELIEF_AREA - CARD_AREA), 0, 1))
@@ -358,6 +360,7 @@ class Scene:
         self.mask = mask
         self.plates = {}
         self.subjects = {0: mask}
+        self.supports = {}
         self._history = []
         self._solve()
         self.set_plate(0, plate, plate_mask)
@@ -374,6 +377,13 @@ class Scene:
         depths, _, _ = self.model.reconstruct([self.images[index], plate])
         # Relative to the view's visible scenery, so later solves can rescale it.
         self.plates[index] = (plate, plate_mask, depths[1] / float(np.median(depths[1][~plate_mask])))
+        # The plate keeps what the subject sits or stands on. Inside the subject mask, the plate shows either that
+        # support, at the subject's depth, or new scenery behind the subject. The support is already drawn by the
+        # subject's card, so the plate layer leaves it out; drawn twice, test 1 showed two crates.
+        subject = self.subjects.get(index)
+        if subject is not None and subject.shape == depths[0].shape and subject.any():
+            median = float(np.median(depths[0][subject]))
+            self.supports[index] = subject & (np.abs(np.log(depths[1] / median)) < CARD_DEPTH)
 
     def _solve(self):
         self.depths, self.c2w, self.k = self.model.reconstruct(self.images)
@@ -411,7 +421,8 @@ class Scene:
         if source in self.plates:
             plate, mask, relative = self.plates[source]
             depth = relative * float(np.median(self.depths[source][~mask]))
-            layers = (point_cloud(plate, expand_far(depth, near), self.k[source], pose, only=mask),)
+            only = mask & ~self.supports[source] if source in self.supports else mask
+            layers = (point_cloud(plate, expand_far(depth, near), self.k[source], pose, only=only),)
         rotation, centre = orbit(self.pivot, *target)
         image, covered = render(cloud, self.k[0], rotation, centre, size, layers=layers)
         return Image.fromarray(image), source, float(covered.mean())

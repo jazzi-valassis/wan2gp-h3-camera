@@ -90,6 +90,14 @@ class ViewTargetTests(unittest.TestCase):
         self.assertFalse(views.accepted((45, 0, .7), (45, 0, .5)))  # 40% farther
         self.assertTrue(views.accepted((-178, 0, 1), (179, 0, 1)))  # orbit angles wrap
 
+    def test_a_view_nearer_a_neighbouring_pose_than_its_own_is_not_accepted(self):
+        # Test 1 with checkpoints every 1.3 s: the 45-degree hold view measured 34.6 after the 38-degree checkpoint
+        # measured 41.3. Within 15 degrees of its pose, but nearer the checkpoint's pose: H3 would turn back.
+        hold, before, after = (45, 48, .75), (38, 40.5, .789), (45, 40.5, .711)
+        self.assertTrue(views.accepted((34.6, 48.4, .811), hold))
+        self.assertFalse(views.accepted((34.6, 48.4, .811), hold, (before, after)))
+        self.assertTrue(views.accepted((46, 49, .76), hold, (before, after)))
+
     def test_labels_names_and_task(self):
         self.assertEqual(views.pose_label((45, 48, .75)), "45r 48u 0.75x")
         self.assertEqual(views.pose_label((-22.5, -10, 1.2)), "22.5l 10d 1.2x")
@@ -321,6 +329,14 @@ class ApplyWithViewAnchorsTests(unittest.TestCase):
         self.assertEqual([tasks[0]["seed"] for tasks in session.submissions], [42, 43])
         self.assertEqual(final["image_refs"]["value"][:2], [self.view("40r_0u_1x", 1)] * 2)
         self.assertEqual(self.scenes[0].measured, [(0.0, 0.0, 1.0), (42.0, 0.0, 1.0)])
+
+    def test_a_view_that_lands_behind_the_previous_pose_is_reaimed(self):
+        self.plugin._wangp_session = session = FakeSession(self.folder.name)
+        # The 45-degree hold measures 33 degrees, nearer the 22.5-degree checkpoint before it than its own pose.
+        FakeScene.misses = [(0, 0, 1), (-12, 0, 1), (1, 0, 1)]
+        self.apply(self.args([pose(0, 0), pose(.5, 45), pose(1, 45)]))
+        self.assertEqual([tasks[0]["seed"] for tasks in session.submissions], [42, 42, 43])
+        self.assertEqual(self.scenes[0].aims[1:], [(45.0, 0.0, 1.0), (57.0, 0.0, 1.0)])
 
     def test_a_view_that_misses_twice_is_left_out_and_text_guides_that_pose(self):
         # Test 1 (2026-10-16): the end view of a 45-degree orbit measured 100 degrees on both attempts, and keeping

@@ -71,7 +71,7 @@ class H3CameraPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = "H3 Camera"
-        self.version = "0.6.2"
+        self.version = "0.6.3"
         self.type = ["extension"]
         self.description = "Visual single-shot camera paths for MiniMax H3"
 
@@ -718,7 +718,10 @@ class H3CameraPlugin(WAN2GPPlugin):
                             break
                         yield from relay(run.view(helper, f"helper view on the way to view {number} of {len(targets)}"))
                         previous = helper
-                    cached, got = yield from relay(run.view(pose, f"view {number} of {len(targets)}"))
+                    # The view must not land nearer the poses planned before and after it than its own.
+                    before = targets[number - 2]["pose"] if number > 1 else (0.0, 0.0, 1.0)
+                    after = [target["pose"] for target in targets[number:number + 1]]
+                    cached, got = yield from relay(run.view(pose, f"view {number} of {len(targets)}", (before, *after)))
                     cache[chain] = cached or ("missed", got)
                 files.append(cached)
                 measured.append(got)
@@ -984,9 +987,9 @@ class _ViewRun:
         self.files.append(file)
         return got
 
-    def view(self, pose, label):
-        """Render one view at ``pose``, re-aimed once past the miss if it lands too far. Returns (file, measured);
-        file is None when both attempts miss."""
+    def view(self, pose, label, neighbours=()):
+        """Render one view at ``pose``, re-aimed once past the miss if it lands too far or nearer a ``neighbours``
+        pose than its own. Returns (file, measured); file is None when both attempts miss."""
         attempts, aim = [], pose
         yield from self._prepare_source(pose)
         for attempt in range(2):
@@ -1002,7 +1005,7 @@ class _ViewRun:
             with Image.open(file) as view:
                 got = self.scene.add(view, pose)
             attempts.append((view_anchors.pose_gap(got, pose), attempt, file, got))
-            if view_anchors.accepted(got, pose):
+            if view_anchors.accepted(got, pose, neighbours):
                 self.files.append(file)
                 return file, got
             self.scene.drop_last()
