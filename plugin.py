@@ -5,13 +5,16 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import threading
 from pathlib import Path
 import tempfile
 import time
+from types import SimpleNamespace
 
 import gradio as gr
+import numpy as np
 from PIL import Image
 
 from shared.utils.frame_scheduler import normalize_frame_count
@@ -26,12 +29,22 @@ try:
     from shared.api import create_gradio_webui_session
 except ImportError:
     create_gradio_webui_session = None
+try:
+    from shared.deepy.hybrid import service_for
+except ImportError:
+    service_for = None
+try:
+    import preprocessing.depth_anything_v3.depth  # noqa: F401  (Depth Anything 3 renders the exact-pose views)
+    DEPTH_READY = True
+except ImportError:
+    DEPTH_READY = False
 
 from .camera_plan import DEFAULT_PATH, PRESETS, compile_plan, validate_path, keyframe_frame, strip_camera_plan
 from .editor import BRIDGE_JS, render_editor
 from .image_anchors import merge_timed_images
 from . import timing as camera_timing
 from . import view_anchors
+from . import view_geometry
 
 
 MAX_PLAN_BYTES = 64 * 1024
@@ -58,7 +71,7 @@ class H3CameraPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = "H3 Camera"
-        self.version = "0.5.0"
+        self.version = "0.6.0"
         self.type = ["extension"]
         self.description = "Visual single-shot camera paths for MiniMax H3"
 
@@ -69,6 +82,8 @@ class H3CameraPlugin(WAN2GPPlugin):
             self.request_global(name)
         self.request_global("PROMPT_TOOLS_ATTACH_JS")
         self.request_global("save_path")
+        # Optional: lets view renders start on the server when no browser tab relays the queue trigger.
+        self.request_global("load_queue_action")
         self.add_custom_js(f"({BRIDGE_JS})();")
         # WanGP's plugin generation API renders the view anchors in the live queue.
         self._wangp_session = None
@@ -144,24 +159,26 @@ class H3CameraPlugin(WAN2GPPlugin):
                         export_state = gr.State(value=None, delete_callback=self.cleanup_export)
             close_loop = gr.Checkbox(label="Close loop: reuse the selected Start Image as the End Image",
                                      value=False)
-            views_ready = self._wangp_session is not None and window_contexts is not None
+            views_ready = self._wangp_session is not None and window_contexts is not None and DEPTH_READY
             with gr.Accordion("Generated view anchors (recommended for orbits)", open=True):
-                gr.Markdown("Text alone does not tell H3 which side to end on, so some seeds orbit past the subject's back. "
-                            "With this on, **Apply** first renders a still of each keyframe view from the Start Image with "
-                            "Qwen Image Edit Plus (2511), the Multiple-Angles LoRA and the 8-step Lightning LoRA, then injects "
-                            "the views at their keyframe times. Keyframes need orbit angles within 5 degrees of a 45-degree step "
-                            "and elevations near -30, 0, 30 or 60 degrees; other keyframes keep text guidance only. It needs an "
-                            "H3 Ref2VA model and one Start Image; otherwise Apply uses text guidance and says why. Views take "
-                            "about 15-30 seconds each plus a model switch (cached for the same image, view and seed), appear in "
-                            "the gallery, and need the Media Generator tab focused while they render.")
+                gr.Markdown("Text alone does not tell H3 which side to end on or how fast to move, so some seeds orbit past "
+                            "the subject's back or linger at a hold. With this on, **Apply** first renders a still of every "
+                            "keyframe view at its exact angle, elevation and distance, plus a pacing checkpoint inside each "
+                            "move longer than 2.6 seconds, then injects them at their times. Depth Anything 3 re-renders the "
+                            "Start Image (or a view made just before) from the new camera, and Qwen Image 2.1 with the AnyAngle "
+                            "and Pruna 8-step LoRAs cleans that render up in the Start Image's style, keeping its setting and "
+                            "objects. Each view is measured afterwards and re-aimed once if it misses. It needs an H3 Ref2VA "
+                            "model and one Start Image; otherwise Apply uses text guidance and says why. Views take about ten "
+                            "seconds each plus a model switch, are cached for the same image, path and seed, and appear in "
+                            "the gallery.")
                 with gr.Row():
                     anchor_views = gr.Checkbox(label="Anchor keyframe views with generated images", value=views_ready,
                                                interactive=views_ready)
                     view_seed = gr.Number(label="View image seed", value=42, precision=0, minimum=0)
                 views = gr.Gallery(label="Generated views", columns=4, height=260, interactive=False)
                 if not views_ready:
-                    gr.Markdown("This WanGP build lacks the plugin generation API or timed-image labels. Update WanGP to "
-                                "generate view anchors.")
+                    gr.Markdown("This WanGP build lacks the plugin generation API, timed-image labels or Depth Anything 3. "
+                                "Update WanGP to generate view anchors.")
             with gr.Accordion("Automatic hold timing", open=True):
                 gr.Markdown("H3 often arrives at a hold early or leaves it late. When a render of a camera plan with one hold "
                             "appears in the output folder, this measures the still interval from background motion, retimes "
@@ -590,16 +607,16 @@ class H3CameraPlugin(WAN2GPPlugin):
         """Why view anchors cannot be added to this form, or None."""
         if not use_views:
             return "view anchors are turned off."
-        if self._wangp_session is None or window_contexts is None:
-            return "this WanGP build lacks the plugin generation API or timed-image labels."
+        if self._wangp_session is None or window_contexts is None or not DEPTH_READY:
+            return "this WanGP build lacks the plugin generation API, timed-image labels or Depth Anything 3."
         try:
-            _, initial = self._anchor_form(args)
+            values, initial = self._anchor_form(args)
         except gr.Error as error:
             return str(error.message if hasattr(error, "message") else error)
-        targets, _ = view_anchors.anchor_targets(initial["path"], initial["frame_count"], keyframe_frame)
+        targets, _ = view_anchors.anchor_targets(initial["path"], initial["frame_count"], keyframe_frame,
+                                                 initial["fps"], values["interpolation"])
         if not targets:
-            return ("no keyframe matches a view the Multiple-Angles LoRA can render (orbit within 5 degrees of a "
-                    "45-degree step, elevation near -30, 0, 30 or 60 degrees).")
+            return "the path never leaves the start view, which the Start Image already shows."
         return None
 
     def apply_camera(self, use_views, seed, *args):
@@ -650,10 +667,16 @@ class H3CameraPlugin(WAN2GPPlugin):
         count = len(FORM_OUTPUTS) + 3 + len(ANCHOR_OUTPUTS) + 1
         status_index = len(FORM_OUTPUTS) + 2
 
-        def status_only(message):
-            updates = [gr.update()] * count
-            updates[status_index] = gr.update(value=message)
-            return tuple(updates)
+        def relay(steps):
+            """Forward a _ViewRun step's progress text as status updates and return its result."""
+            while True:
+                try:
+                    message = next(steps)
+                except StopIteration as stop:
+                    return stop.value
+                updates = [gr.update()] * count
+                updates[status_index] = gr.update(value=message)
+                yield False, tuple(updates)
 
         values, initial = self._anchor_form(args)
         try:
@@ -664,43 +687,69 @@ class H3CameraPlugin(WAN2GPPlugin):
             positions = self._injection_positions(values, initial)
         except (ValueError, TypeError, OverflowError) as error:
             raise gr.Error(str(error)) from error
-        targets, skipped = view_anchors.anchor_targets(initial["path"], initial["frame_count"], keyframe_frame)
+        fps = initial["fps"]
+        targets, skipped = view_anchors.anchor_targets(initial["path"], initial["frame_count"], keyframe_frame, fps,
+                                                       values["interpolation"])
         image_path, size = self._image_file(initial["image_start"][0])
         resolution = view_anchors.view_resolution(*size)
         image_hash = hashlib.sha1(Path(image_path).read_bytes()).hexdigest()
         cache = self.__dict__.setdefault("_view_cache", {})
-        prompts = list(dict.fromkeys(targets.values()))
-        images = {}
-        for prompt in prompts:
-            cached = cache.get((image_hash, prompt, seed, resolution))
-            if cached and Path(cached).is_file():
-                images[prompt] = cached
-        missing = [prompt for prompt in prompts if prompt not in images]
-        if missing:
-            tasks = view_anchors.view_tasks(missing, image_path, resolution, seed)
-            yield False, status_only(f"Generating {len(missing)} view image(s) with Qwen Image Edit Plus (2511) in the WanGP queue...")
-            job = session.submit(tasks)
-            started = last = time.time()
-            while not job.done:
-                time.sleep(0.5)
-                if time.time() - last >= 5:
-                    last = time.time()
-                    yield False, status_only(f"Generating {len(missing)} view image(s)... {int(last - started)}s elapsed.")
-            result = job.result(timeout=1.0)
-            if result.cancelled:
-                raise gr.Error("View generation was cancelled; the generation form is unchanged.")
-            files = list(result.generated_files or [])
-            if not result.success or len(files) != len(missing):
-                errors = "; ".join(error.message for error in result.errors) or "the queue returned no images"
-                raise gr.Error(f"View generation failed ({errors}); the generation form is unchanged.")
-            for prompt, file in zip(missing, files):
-                images[prompt] = cache[(image_hash, prompt, seed, resolution)] = file
-        frames = sorted(targets)
-        description = (f" Generated view anchors at frames {' '.join(str(frame + 1) for frame in frames)} (1-based), seed {seed}."
-                       + view_anchors.describe(initial["path"], initial["frame_count"], keyframe_frame, targets, skipped))
-        updates = self._apply_image_updates(values, initial, positions,
-                                            {frame: images[targets[frame]] for frame in frames}, description)
-        yield True, self._as_updates((*updates, [(images[prompt], prompt.replace("<sks> ", "")) for prompt in prompts]))
+        run = self._view_run(session, values["state"], image_path, resolution, seed)
+        # A view depends on every view rendered before it, so the cache key is the whole chain so far.
+        chain = (image_hash, resolution, seed)
+        files, measured = [], []
+        previous = (0.0, 0.0, 1.0)
+        try:
+            yield from relay(run.start(len(targets), cache, (image_hash, resolution, seed)))
+            for number, target in enumerate(targets, 1):
+                pose = target["pose"]
+                chain += (pose,)
+                cached = cache.get(chain)
+                if cached and Path(cached).is_file():
+                    got = yield from relay(run.reuse(cached, pose))
+                else:
+                    # Re-render from a view at most MAX_STEP away: far targets first get helper views along the path.
+                    while view_anchors.pose_gap(run.nearest(pose), pose) > view_anchors.MAX_STEP:
+                        helper = view_anchors.helper_pose(previous, pose)
+                        if helper is None:
+                            break
+                        yield from relay(run.view(helper, f"helper view on the way to view {number} of {len(targets)}"))
+                        previous = helper
+                    cached, got = yield from relay(run.view(pose, f"view {number} of {len(targets)}"))
+                    cache[chain] = cached
+                files.append(cached)
+                measured.append(got)
+                previous = pose
+        finally:
+            run.close()
+        frames = sorted(frame for target in targets for frame in target["frames"])
+        description = (f" Generated exact-pose view anchors at frames {' '.join(str(frame + 1) for frame in frames)} "
+                       f"(1-based), seed {seed}." + view_anchors.describe(targets, skipped, measured, fps))
+        additions = {frame: file for target, file in zip(targets, files) for frame in target["frames"]}
+        updates = self._apply_image_updates(values, initial, positions, additions, description)
+        gallery = [(file, f"{', '.join(f'{frame / fps:.2f}s' for frame in sorted(target['frames']))}: "
+                          f"{view_anchors.pose_label(target['pose'])} (measured {view_anchors.pose_label(got)})")
+                   for target, file, got in zip(targets, files, measured)]
+        yield True, self._as_updates((*updates, gallery))
+
+    def _view_run(self, session, state, image_path, resolution, seed):
+        return _ViewRun(self, session, state, image_path, resolution, seed)
+
+    def _start_queue_without_browser(self, state):
+        """Admit a plugin job that is waiting for a browser tab to relay the queue trigger.
+
+        Plugin jobs normally start when the page that pressed Apply forwards WanGP's queue trigger, and a
+        background or unfocused tab can delay that indefinitely. WanGP's server-side generation service (the
+        one Deepy uses) can load the waiting inline queue itself. Returns whether it did."""
+        service = service_for(state) if service_for is not None else None
+        gen = state.get("gen") if isinstance(state, dict) else None
+        load = getattr(self, "load_queue_action", None)
+        if service is None or not isinstance(gen, dict) or gen.get("inline_queue") is None or not callable(load):
+            return False
+        load(None, state, SimpleNamespace(target=1))
+        service.start_generation()
+        print("[H3 Camera] No browser tab relayed the queue trigger; started the view render on the server.")
+        return True
 
     def auto_timing_tick(self, enabled, shown):
         """Timer callback: start corrections for new renders and show the latest result once."""
@@ -828,6 +877,151 @@ class H3CameraPlugin(WAN2GPPlugin):
                 return target.name
         except (OSError, ValueError, TypeError) as error:
             raise gr.Error(str(error)) from error
+
+
+class _ViewRun:
+    """One Apply's view renders: the depth model, the registered views and their queue jobs.
+
+    Steps are generators that yield progress text and return their result."""
+
+    # Seconds a job may wait for the browser to relay WanGP's queue trigger before the server starts it.
+    BROWSER_GRACE = 2.0
+
+    def __init__(self, plugin, session, state, image_path, resolution, seed):
+        self.plugin, self.session, self.state = plugin, session, state
+        self.image_path, self.resolution, self.seed = image_path, resolution, seed
+        self.size = tuple(map(int, resolution.split("x")))
+        self.folder = Path(tempfile.mkdtemp(prefix="h3_camera_views_"))
+        self.model = view_geometry.DepthModel()
+        self.scene = None
+        self.renders = 0
+
+    def _busy(self):
+        gen = self.state.get("gen") if isinstance(self.state, dict) else None
+        return isinstance(gen, dict) and bool(gen.get("in_progress") or gen.get("queue"))
+
+    def _wait_idle(self):
+        """Depth estimation shares the GPU; let any running generation finish first."""
+        last = 0.0
+        while self._busy():
+            if time.time() - last >= 5:
+                last = time.time()
+                yield "Waiting for the current generation to finish before estimating depth..."
+            time.sleep(0.5)
+
+    def start(self, count, cache, key):
+        """Find the subject, paint it out for a background plate, and register the Start Image."""
+        self.cache = cache
+        yield from self._wait_idle()
+        yield f"Preparing {count} exact-pose view(s): finding the subject in the Start Image..."
+        with Image.open(self.image_path) as start:
+            start = start.convert("RGB").resize(self.size)
+        mask = view_geometry.subject_mask(start)
+        plate, grown = yield from self._plate(self.image_path, start, mask, "the Start Image")
+        yield f"Preparing {count} exact-pose view(s): estimating depth..."
+        self.scene = view_geometry.Scene(self.model, start, mask, plate, grown)
+        self.files = [self.image_path]
+
+    def _plate(self, file, image, mask, label):
+        """Background plate of one picture: its subject painted out. Returns (plate, grown mask) or (None, None)."""
+        # A subject filling most of the frame leaves nothing to paint behind it.
+        if mask is None or not .005 <= mask.mean() <= .6:
+            return None, None
+        grown = view_geometry.plate_mask(mask)
+        key = ("plate", file, self.resolution, self.seed)
+        plate = self.cache.get(key)
+        if not (plate and Path(plate).is_file()):
+            self.renders += 1
+            mask_path = self.folder / f"plate_mask_{self.renders}.png"
+            Image.fromarray(grown.astype(np.uint8) * 255).save(mask_path)
+            task = view_anchors.plate_task(file, str(mask_path), self.resolution, self.seed,
+                                           view_anchors.VIEW_PREFIX + f"plate_s{self.seed}")
+            plate = yield from self._render(task, f"the background plate of {label}",
+                                            f"Painting the subject out of {label} for a background layer...")
+            self.cache[key] = plate
+        yield from self._wait_idle()
+        with Image.open(plate) as picture:
+            return picture.convert("RGB").resize(self.size), grown
+
+    def _prepare_source(self, pose):
+        """A generated view about to be re-rendered gets its own background plate first."""
+        source = self.scene.source_for(pose, self.size)
+        if source == 0 or source in self.scene.plates:
+            return
+        image = self.scene.images[source]
+        plate, grown = yield from self._plate(self.files[source], image, view_geometry.subject_mask(image),
+                                              "the nearest generated view")
+        self.scene.set_plate(source, plate, grown)
+
+    def nearest(self, pose):
+        return min(self.scene.measured, key=lambda measured: view_anchors.pose_gap(measured, pose))
+
+    def reuse(self, file, pose):
+        """Register a cached view; returns its measured pose."""
+        yield from self._wait_idle()
+        with Image.open(file) as view:
+            got = self.scene.add(view, pose)
+        self.files.append(file)
+        return got
+
+    def view(self, pose, label):
+        """Render one view at ``pose``, re-aimed once past the miss if it lands too far. Returns (file, measured)."""
+        attempts, aim = [], pose
+        yield from self._prepare_source(pose)
+        for attempt in range(2):
+            coarse, _, _ = self.scene.coarse(aim, self.size)
+            self.renders += 1
+            coarse_path = self.folder / f"coarse_{self.renders}.png"
+            coarse.save(coarse_path)
+            task = view_anchors.view_task(self.image_path, str(coarse_path), self.resolution, self.seed + attempt,
+                                          view_anchors.view_name(pose, self.seed, attempt))
+            what = f"{label} ({view_anchors.pose_label(pose)}{', re-aimed' if attempt else ''})"
+            file = yield from self._render(task, what)
+            yield from self._wait_idle()
+            with Image.open(file) as view:
+                got = self.scene.add(view, pose)
+            attempts.append((view_anchors.pose_gap(got, pose), attempt, file, got))
+            if attempts[-1][0] <= view_anchors.ACCEPT_GAP:
+                self.files.append(file)
+                return file, got
+            self.scene.drop_last()
+            aim = view_anchors.aimed_pose(pose, got)
+        # Neither attempt met the tolerance: keep the closer one.
+        _, _, file, _ = min(attempts)
+        with Image.open(file) as view:
+            got = self.scene.add(view, pose)
+        self.files.append(file)
+        return file, got
+
+    def _render(self, task, what, first=None):
+        job = self.session.submit([task])
+        started = last = time.time()
+        relayed = False
+        yield first or f"Rendering {what} with Qwen Image 2.1 and AnyAngle..."
+        while not job.done:
+            time.sleep(0.25)
+            now = time.time()
+            if not relayed and now - started >= self.BROWSER_GRACE:
+                relayed = True
+                try:
+                    self.plugin._start_queue_without_browser(self.state)
+                except Exception as error:  # The browser can still relay the trigger.
+                    print(f"[H3 Camera] Could not start the view render on the server: {error}")
+            if now - last >= 5:
+                last = now
+                yield f"Rendering {what}... {int(now - started)}s elapsed."
+        result = job.result(timeout=1.0)
+        if result.cancelled:
+            raise gr.Error("View generation was cancelled; the generation form is unchanged.")
+        files = list(result.generated_files or [])
+        if not result.success or len(files) != 1:
+            errors = "; ".join(error.message for error in result.errors) or "the queue returned no image"
+            raise gr.Error(f"View generation failed ({errors}); the generation form is unchanged.")
+        return files[0]
+
+    def close(self):
+        self.model.close()
+        shutil.rmtree(self.folder, ignore_errors=True)
 
 
 class _AutoTiming:
