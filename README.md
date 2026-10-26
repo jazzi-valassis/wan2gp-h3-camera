@@ -4,9 +4,9 @@ A visual single-shot camera planner for MiniMax H3 in [WanGP / Wan2GP](https://g
 
 **Author and maintainer:** [Jazzi](https://github.com/jazzi-valassis)
 
-**Version:** 0.6.3 · **License:** [MIT](LICENSE) · **Plugin type:** extension
+**Version:** 0.7.0 · **License:** [MIT](LICENSE) · **Plugin type:** extension
 
-The plugin adds no model downloads or GPU allocations. Camera movement is prompt guidance: the diagram does not impose an exact 3D trajectory on the model. Optional timing tools use FFmpeg/FFprobe on PATH and WanGP's existing OpenCV, NumPy and Pillow packages.
+Planning and text guidance add no model downloads or GPU allocations; the optional camera guidance on Apply uses WanGP's Depth Anything 3 and Qwen Image 2.1. Camera movement is guidance: the diagram does not impose an exact 3D trajectory on the model. Optional timing tools use FFmpeg/FFprobe on PATH and WanGP's existing OpenCV, NumPy and Pillow packages.
 
 ## Features
 
@@ -16,7 +16,8 @@ The plugin adds no model downloads or GPU allocations. Camera movement is prompt
 - Portable JSON plans and optional closed-loop conditioning using the existing Start Image.
 - Elevation instructions describe physical camera movement, lens tilt, and the requested endpoint view.
 - Optional roll stabilization, explicit stationary holds, and a button to insert a half-second hold.
-- Exact-pose view anchors on Apply: each keyframe view, and a pacing checkpoint inside every move longer than 2.6 seconds, is rendered at its planned angle, height and distance (Depth Anything 3 + Qwen Image 2.1 with the AnyAngle LoRA), measured, and injected only if it landed within 15 degrees and 30% distance of the plan, so H3 lands on the planned side and height.
+- Camera preview video on Apply (recommended): Depth Anything 3 re-renders the Start Image along the whole path, and H3 takes only the camera movement from it as a Reference Video, so the camera follows the path while H3 animates the subject in three dimensions.
+- Exact-pose view anchors as an alternative: each keyframe view, and a pacing checkpoint inside every move longer than 2.6 seconds, is rendered at its planned angle, height and distance (Depth Anything 3 + Qwen Image 2.1 with the AnyAngle LoRA), measured, and injected only if it landed within 15 degrees and 30% distance of the plan, so H3 lands on the planned side and height.
 - Automatic hold timing: renders of a one-hold plan get a verified `_timed` copy whose hold sits exactly on the planned frames.
 - Native image anchors at both ends of a hold, with automatic Picture numbering and reference preservation.
 - Timed image checkpoints within a move, with pass-through instructions that do not add stops or alter the saved path.
@@ -53,7 +54,7 @@ Enable **H3 Camera**, save settings, and restart WanGP as above.
 
 ### Install from a ZIP
 
-Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.6.3.zip`, run `python scripts/build_release.py`. Use the Git installation method for the latest source version; downloadable releases may lag behind main.
+Download the prepared plugin ZIP from the [releases page](https://github.com/jazzi-valassis/wan2gp-h3-camera/releases). Extract it into WanGP's `plugins` directory, then enable the plugin and restart as above. Each prepared release includes a SHA-256 checksum and per-file manifest. To package this checkout as `wan2gp-h3-camera-0.7.0.zip`, run `python scripts/build_release.py`. Use the Git installation method for the latest source version; downloadable releases may lag behind main.
 
 The final layout must be:
 
@@ -89,7 +90,7 @@ The repository root contains the plugin files directly, so the public URL can be
 
 ## Compatibility
 
-Version **0.6.3** is tested with the installed **WanGP v17.01**, host HEAD `0e58385fbde7ff102d276e4a9e490845de76b4ea` with existing local host edits, and **Gradio 5.29.0**. Image anchoring needs the native `shared.prompt_enhancer.images.window_contexts` and `resolve_injected_positions` helpers and an H3 Ref2VA model supporting Inject Frames. Generated view anchors also need WanGP's bundled Depth Anything 3 preprocessor. If those helpers are absent, the image-anchor buttons are disabled; ordinary prompt planning remains available when the other requested host APIs exist. Timing correction needs FFmpeg/FFprobe on PATH. Older releases are not certified for the new image workflow. See [VALIDATION.md](VALIDATION.md) for the exact local checks.
+Version **0.7.0** is tested with the installed **WanGP v17.01**, host HEAD `0e58385fbde7ff102d276e4a9e490845de76b4ea` with existing local host edits, and **Gradio 5.29.0**. Image anchoring needs the native `shared.prompt_enhancer.images.window_contexts` and `resolve_injected_positions` helpers and an H3 Ref2VA model supporting Inject Frames. Camera guidance also needs WanGP's bundled Depth Anything 3 preprocessor, and the camera preview video an H3 Ref2VA model that accepts a Reference Video. If those helpers are absent, the image-anchor buttons are disabled; ordinary prompt planning remains available when the other requested host APIs exist. Timing correction needs FFmpeg/FFprobe on PATH. Older releases are not certified for the new image workflow. See [VALIDATION.md](VALIDATION.md) for the exact local checks.
 
 The plugin uses `WAN2GPPlugin`, component/global requests, `insert_after`, and `add_custom_js`, plus the installed frame scheduler, prompt parser and native image-label helper. These are WanGP dependencies, not additional files to ship. It does not patch the pipeline, launch another server, submit its own generation jobs, or import `h3cam_ref` or MiniMaxH3Mod.
 
@@ -102,7 +103,7 @@ Missing required form controls or injected host functions produce a compatibilit
 3. Write one scene in the main prompt, including any desired dialogue and sound. Set the native frame count and FPS.
 4. Open **H3 Camera - single-shot planner** below the prompt. Choose a preset, edit keyframes and preview the camera move. Time is normalized across the selected clip, with the final pose at its last frame.
 5. Choose whether the scene can animate (default) or is frozen, and smooth or linear camera movement. **Stabilize camera roll** is on by default; turn it off for intentional banking or lens-axis rotation. **Preview camera prompt** changes no generation settings.
-6. Click **Apply camera path to generation form**, then use the normal **Generate** or **Add to Queue** button. With an H3 Ref2VA model and a Start Image, Apply first anchors generated keyframe views (see below); otherwise it applies text guidance and the status says why. Apply again after editing the path, scene, or duration.
+6. Click **Apply camera path to generation form**, then use the normal **Generate** or **Add to Queue** button. With an H3 Ref2VA model and a Start Image, Apply first adds the chosen camera guidance, by default a camera preview video (see below); otherwise it applies text guidance and the status says why. Apply again after editing the path, scene, or duration.
 7. Leave the page open while rendering: **Automatic hold timing** saves a `_timed` copy whose hold sits exactly on the planned frames.
 
 Select a keyframe in the strip, then drag the diagram horizontally to orbit or vertically to change elevation. The first drag direction locks that axis until release. Focus the diagram and use the mouse wheel to change distance, or use its arrow keys (hold Shift for larger steps). Numeric controls provide precise edits. **Add** inserts a keyframe between the selected pose and the next pose; the first pose stays fixed. Scrub or play to preview the planned move.
@@ -131,19 +132,36 @@ If reference images are active, adding an End Image changes their H3 picture num
 
 Use **Camera path JSON and saved plans** to save or load portable `.json` plans. Saved plans include keyframes, scene-motion choice, interpolation, loop choice and roll stabilization. Older plans and bare keyframe arrays load with stabilization on. They do not overwrite the main scene prompt or duration. Bare keyframe arrays from the original editor are supported when they satisfy the normalized schema. The ordinary WanGP queue stores the compiled prompt and generation settings, so queued jobs do not need the planner to run.
 
-### Generated view anchors (recommended for orbits)
+### Camera guidance (recommended for orbits)
 
-Prompt wording cannot say which side of the subject an orbit should finish on, and some seeds circle past the subject's back to the far side. With **Anchor keyframe views with generated images** on (the default), **Apply** gives H3 a picture of each target view instead:
+Prompt wording cannot say which side of the subject an orbit should finish on or how fast the camera should travel, so some seeds circle past the subject's back or reach a hold early. **Apply** can show H3 the camera path instead. Choose under **Camera guidance**:
 
-1. Select an H3 **Ref2VA** model and add exactly one active **Start Image**. Keep the identity reference in **Reference Images** if you use one.
-2. Plan the path. Every keyframe that leaves the start view gets a view at its exact orbit angle, elevation and distance, and every move longer than 2.6 seconds also gets pacing checkpoints, so H3 cannot finish a long move early and linger. The start view is never re-anchored (the Start Image already shows it), and a hold shares one view at both ends.
-3. Click **Apply camera path to generation form**. For each view, Depth Anything 3 re-renders the Start Image from the new camera, and Qwen Image 2.1 with the AnyAngle and Pruna 8-step LoRAs turns that coarse render into a clean picture in the Start Image's style. A generated view is used as the source only when the Start Image sees less than a fifth of the target (large orbits); generated views pass their flaws on. The subject is painted out of the source picture so the moving camera sees background where it stood (what it sits or stands on stays, and is drawn once, with the subject), and a small subject is re-rendered as a flat card: across a figure a few dozen pixels wide, depth is mostly noise that would smear the body into streaks. Each view is then measured against the Start Image; a view whose angle misses the plan by more than 15 degrees, whose distance is off by more than 30%, or that lands nearer the pose planned before or after it than its own (so the camera would turn back between them), is re-aimed once, and if it still misses it is left out, so that keyframe keeps text guidance only. The plugin injects the kept views at their frames, renumbers your `<Picture N>` labels and applies the camera path. The status lists every view with its planned and measured pose, and any view that was left out. Generate normally afterwards.
+- **Camera preview video** (recommended, the default): a rough fly-through of the Start Image along the path, attached as a Reference Video.
+- **Exact-pose view anchors:** stills of the keyframe views, injected at their frames.
+- **Text only:** the written camera plan alone.
 
-When views cannot be added (anchors turned off, an FL2VA model, no Start Image, a path that never leaves the start view, or a WanGP build without the plugin generation API or Depth Anything 3), Apply still applies the text plan and appends *Text guidance only: <reason>* to the status.
+Both picture modes need an H3 **Ref2VA** model and exactly one active **Start Image**; keep the identity reference in **Reference Images** if you use one. When the chosen mode cannot be used (no Start Image, an FL2VA model, a path that never leaves the start view, a WanGP build without the plugin generation API or Depth Anything 3, or one of the preview limits below), Apply still applies the text plan and appends *Text guidance only: <reason>* to the status. Generated media are cached per Start Image, path and **Seed for generated images**, so applying again reuses them; change the seed to get new ones. Media from an earlier Apply are removed before new ones are added, and switching modes detaches the other mode's media.
 
-The views use WanGP's normal queue and appear in the gallery (about ten seconds per view once the model is loaded, plus a model switch). If no browser tab relays the queue trigger, the plugin starts the view render on the server. The model and both LoRAs download on first use. Views are cached per Start Image, path and **View image seed**, so applying again reuses them, including the decision to leave a missed view out; change the seed to get new ones. Views from an earlier Apply are removed before new ones are injected, so an edited path never keeps stale anchors.
+#### Camera preview video
 
-Views are generated stills: H3 follows them within a few degrees, and they also fix the subject's pose and the background at those frames. That is why a view that misses its pose is left out rather than used: a view 50 degrees off would pull the render 50 degrees off the plan. Generated views can still add small props the scene does not have (a plank or box beside the subject, long hair drawn across the floor) or change objects; these vary with the **View image seed**, so review the views in the gallery before generating and change the seed if one is wrong.
+1. Plan the path, keep **Camera preview video** selected and click **Apply camera path to generation form**.
+2. The plugin paints the subject out of the Start Image for a background layer (one Qwen Image 2.1 edit through WanGP's queue; what the subject sits or stands on stays), then Depth Anything 3 re-renders the Start Image from the camera of every frame along the path, at half the generation size. A small subject is drawn as a flat card at its depth, as in the views below. This takes one to two minutes.
+3. The video is blurred, turned grey, saved as `h3cam_camera_<id>_s<seed>.mp4` in WanGP's output folder and attached as `<Video 1>` in **Reference Video** (H3 Ref2VA mode `V-U`). The prompt tells H3 to transfer only its camera movement: path, height, viewing direction, speed and framing over time. Generate normally afterwards.
+
+People, objects, light and textures still come from the pictures, and H3 animates the subject itself, so the subject turns in three dimensions as the camera moves around them. The preview is grey and blurred so H3 does not copy its rough look: in colour, the smeared roof of test 1's preview came back as streaks on the rendered roof, and blurring alone only softened them. No poses are injected, so nothing pins the subject at fixed frames.
+
+On test 1 (a 45-degree orbit rising to a 48-degree high angle, a half-second hold, and a descent to eye level at half the distance) two seeds followed the plan within 3 degrees around the subject and 8 degrees in height at every measured frame, and held on the planned frames (119-136 and 122-144 for 121-133), and the subject turned towards the camera instead of staying a flat profile. See [VALIDATION.md](VALIDATION.md).
+
+Limits: the preview occupies the Reference Video, so it is not available while another Reference or Control Video is attached; H3 reads at most 15 seconds (362 frames) of a Reference Video; and the model must accept one. H3 also reads the video, so the render takes about twice as long (12 to 13 minutes instead of 6 for test 1's 243 frames). Use view anchors for longer takes.
+
+#### Exact-pose view anchors
+
+1. Plan the path. Every keyframe that leaves the start view gets a view at its exact orbit angle, elevation and distance, and every move longer than 2.6 seconds also gets pacing checkpoints, so H3 cannot finish a long move early and linger. The start view is never re-anchored (the Start Image already shows it), and a hold shares one view at both ends.
+2. Choose **Exact-pose view anchors** and click **Apply camera path to generation form**. For each view, Depth Anything 3 re-renders the Start Image from the new camera, and Qwen Image 2.1 with the AnyAngle and Pruna 8-step LoRAs turns that coarse render into a clean picture in the Start Image's style. A generated view is used as the source only when the Start Image sees less than a fifth of the target (large orbits); generated views pass their flaws on. The subject is painted out of the source picture so the moving camera sees background where it stood (what it sits or stands on stays, and is drawn once, with the subject), and a small subject is re-rendered as a flat card: across a figure a few dozen pixels wide, depth is mostly noise that would smear the body into streaks. Each view is then measured against the Start Image; a view whose angle misses the plan by more than 15 degrees, whose distance is off by more than 30%, or that lands nearer the pose planned before or after it than its own (so the camera would turn back between them), is re-aimed once, and if it still misses it is left out, so that keyframe keeps text guidance only. The plugin injects the kept views at their frames, renumbers your `<Picture N>` labels and applies the camera path. The status lists every view with its planned and measured pose, and any view that was left out. Generate normally afterwards.
+
+The views use WanGP's normal queue and appear in the gallery (about ten seconds per view once the model is loaded, plus a model switch). If no browser tab relays the queue trigger, the plugin starts the view render on the server. The model and both LoRAs download on first use. Views are cached per Start Image, path and **Seed for generated images**, so applying again reuses them, including the decision to leave a missed view out; change the seed to get new ones. Views from an earlier Apply are removed before new ones are injected, so an edited path never keeps stale anchors.
+
+Views are generated stills: H3 follows them within a few degrees, and they also fix the subject's pose and the background at those frames. That is why a view that misses its pose is left out rather than used: a view 50 degrees off would pull the render 50 degrees off the plan. Between those poses H3 keeps the subject much as it is, so a small subject can look flat, like a cut-out, while the camera turns around it: on test 1 she stayed in profile through a 45-degree orbit. The camera preview video does not have this problem. Generated views can still add small props the scene does not have (a plank or box beside the subject, long hair drawn across the floor) or change objects; these vary with the **Seed for generated images**, so review the views in the gallery before generating and change the seed if one is wrong.
 
 ### Automatic hold timing
 
@@ -225,7 +243,7 @@ After updating, load your saved plan and press **Apply** again to obtain the new
 
 ## Limits
 
-- Camera coordinates become text instructions plus, where possible, generated view anchors; this is guidance, not an enforced 3D camera track. Views are measured with monocular depth, so their angles are accurate to a few degrees, and close-ups at about 0.3x the start distance or nearer may not register.
+- Camera coordinates become text instructions plus, where possible, a camera preview video or generated view anchors; this is guidance, not an enforced 3D camera track. Views are measured with monocular depth, so their angles are accurate to a few degrees, and close-ups at about 0.3x the start distance or nearer may not register.
 - The first pose is fixed at time 0, azimuth/elevation 0, distance 1. The last time is 1. Use 2–24 keyframes.
 - The planner supports one shot/window, up to 481 frames. Dedicated H3 ControlNet models, multi-shot prompts, scheduler slash commands, video continuation, Control Video editing, still-image mode and audio-only models are rejected before applying.
 - Audio sections and reference tokens in the scene prompt are retained. Frozen mode deliberately overrides subject/environment movement; audio stays governed by the scene prompt.

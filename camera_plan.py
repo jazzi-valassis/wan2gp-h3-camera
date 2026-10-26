@@ -129,12 +129,49 @@ def is_closed_path(path):
             and math.isclose(end["distance"], 1, rel_tol=0, abs_tol=1e-9))
 
 
+# The camera preview video (<Video 1>) is described inside the user's sections, where H3 reads references and
+# actions; these exact texts are what the plugin adds and removes again on the next Apply.
+CAMERA_VIDEO_REFERENCE = ("<Video 1> (camera preview): attribute_transfer - transfer only its camera movement: the camera's "
+                          "path, height, viewing direction, speed and framing over time. Its rough look is a placeholder; "
+                          "the people, objects, light and textures come from the pictures, and every subject is seen in "
+                          "full three-dimensional form from each new camera position.")
+CAMERA_VIDEO_ACTION = "The camera moves exactly as in <Video 1>. "
+
+
+def strip_camera_video(prompt):
+    """Remove the camera preview video lines a previous Apply added."""
+    lines = []
+    for line in prompt.replace("\r\n", "\n").split("\n"):
+        if line.strip() in (CAMERA_VIDEO_REFERENCE, "retention_analysis: " + CAMERA_VIDEO_REFERENCE):
+            continue
+        lines.append(line.replace(CAMERA_VIDEO_ACTION, ""))
+    return "\n".join(lines)
+
+
+def add_camera_video(prompt):
+    """Reference the camera preview video in the prompt: a retention line telling H3 to take only its camera
+    movement (at the end of retention_analysis, before detailed_description) and an action at the start of
+    detailed_description. A prompt without those sections gets both as plain lines at the top."""
+    lines = strip_camera_video(prompt).split("\n")
+    index = next((i for i, line in enumerate(lines) if line.startswith("detailed_description:")), None)
+    if index is None:
+        return CAMERA_VIDEO_ACTION + "\n" + CAMERA_VIDEO_REFERENCE + "\n" + "\n".join(lines)
+    has_retention = any(line.startswith("retention_analysis:") for line in lines[:index])
+    reference = CAMERA_VIDEO_REFERENCE if has_retention else "retention_analysis: " + CAMERA_VIDEO_REFERENCE
+    body = lines[index][len("detailed_description:"):].lstrip()
+    shot = re.match(r"\[Shot \d+\]\s*", body)
+    head = shot.group(0) if shot else ""
+    lines[index] = "detailed_description: " + head + CAMERA_VIDEO_ACTION + body[len(head):]
+    return "\n".join(lines[:index] + [reference] + lines[index:])
+
+
 def strip_camera_plan(prompt):
     """Remove only blocks owned by this plugin, leaving user text and labels."""
     text = prompt.replace("\r\n", "\n").replace("\r", "\n")
     text = BLOCK_RE.sub("", text)
     text = PLAIN_PLAN_RE.sub("", text)
     text = PLAIN_ALIGNMENT_RE.sub("", text)
+    text = strip_camera_video(text)
     if "# WanGP H3 camera " in text:
         raise ValueError("A camera plan marker is incomplete; restore both begin/end markers or remove that block.")
     if re.search(r"(?m)^Camera plan: one continuous take,", text):

@@ -27,6 +27,8 @@ START_BONUS = 0.1
 BACKGROUND = (60, 60, 60)
 # Largest splat radius in pixels (a point then covers up to 19 x 19 pixels).
 SPLAT_MAX = 10
+# Splat cap for the half-size camera preview video, where footprints are half as large.
+PREVIEW_SPLAT_MAX = 6
 # A subject smaller than CARD_AREA of the frame is re-rendered as a flat card; from RELIEF_AREA up it keeps its
 # full depth relief, and in between part of it.
 CARD_AREA = 0.05
@@ -239,7 +241,7 @@ def point_cloud(image, depth, k, c2w=None, edge=0.08, only=None):
     return points, colors, source, (w, h), outline, spans
 
 
-def render(cloud, k, rotation, centre, size, fill=True, layers=()):
+def render(cloud, k, rotation, centre, size, fill=True, layers=(), max_radius=SPLAT_MAX):
     """Splat a point cloud, plus optional hidden ``layers`` behind it, into a camera with a z-buffer.
     Returns (RGB array, covered mask); the first cloud's frame outline bounds the gaps that get filled."""
     import torch
@@ -267,13 +269,14 @@ def render(cloud, k, rotation, centre, size, fill=True, layers=()):
     reach = [torch.hypot(fx * scale * (step[:, 0:1] / z - cam[:, 0:1] * step[:, 2:3] / z ** 2),
                          fy * scale * (step[:, 1:2] / z - cam[:, 1:2] * step[:, 2:3] / z ** 2))[:, 0]
              for step in (spans[:, 0], spans[:, 1])]
-    radius = torch.clamp(torch.ceil(torch.maximum(*reach) / 2 + .75), 2, SPLAT_MAX)
+    radius = torch.clamp(torch.ceil(torch.maximum(*reach) / 2 + .75), 2, max_radius)
     # A point seen closer than in its source view covers more pixels.
-    radius = torch.maximum(radius, torch.clamp(torch.ceil(source / cam[:, 2] * scale * 0.75), 2, 4)).to(torch.int64)
+    radius = torch.maximum(radius, torch.clamp(torch.ceil(source / cam[:, 2] * scale * 0.75), 2, min(4, max_radius)))
+    radius = radius.to(torch.int64)
     zbuf = torch.full((H * W,), float("inf"), device=device, dtype=torch.float64)
     best = torch.full((H * W,), -1, device=device, dtype=torch.int64)
     order = torch.arange(len(cam), device=device)
-    offsets = [(dx, dy) for dy in range(1 - SPLAT_MAX, SPLAT_MAX) for dx in range(1 - SPLAT_MAX, SPLAT_MAX)]
+    offsets = [(dx, dy) for dy in range(1 - max_radius, max_radius) for dx in range(1 - max_radius, max_radius)]
     for write in (False, True):
         for dx, dy in offsets:
             sel = radius > max(abs(dx), abs(dy))
@@ -426,6 +429,22 @@ class Scene:
         rotation, centre = orbit(self.pivot, *target)
         image, covered = render(cloud, self.k[0], rotation, centre, size, layers=layers)
         return Image.fromarray(image), source, float(covered.mean())
+
+    def flythrough(self, poses, size, max_radius=PREVIEW_SPLAT_MAX):
+        """Yield one coarse frame (RGB array) per pose, rendered from the Start Image along the camera path, with
+        uncovered areas filled with soft colour. The camera preview video only has to show where the camera goes;
+        the splat cap keeps a whole take to about a minute at preview size."""
+        cloud, near = self._cloud(0)
+        layers = ()
+        if 0 in self.plates:
+            plate, mask, relative = self.plates[0]
+            depth = relative * float(np.median(self.depths[0][~mask]))
+            only = mask & ~self.supports[0] if 0 in self.supports else mask
+            layers = (point_cloud(plate, expand_far(depth, near), self.k[0], self.c2w[0], only=only),)
+        for pose in poses:
+            rotation, centre = orbit(self.pivot, *pose)
+            image, covered = render(cloud, self.k[0], rotation, centre, size, layers=layers, max_radius=max_radius)
+            yield np.where(covered[..., None], image, push_pull(image, covered))
 
     def source_for(self, target, size=(256, 256)):
         """The view to re-render ``target`` from: the Start Image when it sees at least START_SHARE of the target,

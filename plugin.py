@@ -39,7 +39,8 @@ try:
 except ImportError:
     DEPTH_READY = False
 
-from .camera_plan import DEFAULT_PATH, PRESETS, compile_plan, validate_path, keyframe_frame, strip_camera_plan
+from .camera_plan import (DEFAULT_PATH, PRESETS, add_camera_video, compile_plan, validate_path, keyframe_frame,
+                          strip_camera_plan)
 from .editor import BRIDGE_JS, render_editor
 from .image_anchors import merge_timed_images
 from . import timing as camera_timing
@@ -63,7 +64,22 @@ FORM_OUTPUTS = (
     "image_end", "image_prompt_type", "image_prompt_type_endcheckbox", "image_end_row",
 )
 LABEL_OUTPUTS = ("prompt", "wizard_prompt", "image_end", "prompt_info_label", "wizard_prompt_info_label")
-ANCHOR_OUTPUTS = ("image_refs", "frames_positions", "video_prompt_type", "video_prompt_type_image_refs", "image_refs_row")
+ANCHOR_OUTPUTS = ("image_refs", "frames_positions", "video_prompt_type", "video_prompt_type_image_refs", "image_refs_row",
+                  "video_guide", "video_prompt_type_video_guide")
+# Camera guidance on Apply: a camera preview video, exact-pose view anchors, or the text plan alone.
+GUIDANCE_CHOICES = (("Camera preview video (recommended)", "video"), ("Exact-pose view anchors", "views"), ("Text only", "text"))
+# A generated camera preview video is attached as the first Reference Video (H3 Ref2VA mode "V-U").
+PREVIEW_PREFIX = "h3cam_camera_"
+PREVIEW_VIDEO_MODE = "V-U"
+VIDEO_GUIDE_LETTERS = "GPDEV+*-U1"
+# H3 gives a reference video whole to every window and keeps its first 15 seconds.
+PREVIEW_MAX_FRAMES = 362
+# The preview is rendered at half the generation size, blurred and turned grey, so H3 takes its camera movement rather
+# than its rough look: in colour, the smeared roof of test 1's preview came back as streaks on the rendered roof, and
+# blurring alone only softened them.
+PREVIEW_SCALE = 0.5
+PREVIEW_BLUR = 4.0
+PREVIEW_GREY = True
 ANCHOR_INPUTS = ("path_json", "motion", "interpolation", "close_loop", *FORM_INPUTS, "stabilize_roll", "frames_positions")
 
 
@@ -71,7 +87,7 @@ class H3CameraPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = "H3 Camera"
-        self.version = "0.6.3"
+        self.version = "0.7.0"
         self.type = ["extension"]
         self.description = "Visual single-shot camera paths for MiniMax H3"
 
@@ -160,25 +176,28 @@ class H3CameraPlugin(WAN2GPPlugin):
             close_loop = gr.Checkbox(label="Close loop: reuse the selected Start Image as the End Image",
                                      value=False)
             views_ready = self._wangp_session is not None and window_contexts is not None and DEPTH_READY
-            with gr.Accordion("Generated view anchors (recommended for orbits)", open=True):
+            with gr.Accordion("Camera guidance (recommended for orbits)", open=True):
                 gr.Markdown("Text alone does not tell H3 which side to end on or how fast to move, so some seeds orbit past "
-                            "the subject's back or linger at a hold. With this on, **Apply** first renders a still of every "
-                            "keyframe view at its exact angle, elevation and distance, plus a pacing checkpoint inside each "
-                            "move longer than 2.6 seconds, then injects them at their times. Depth Anything 3 re-renders the "
-                            "Start Image (or a view made just before) from the new camera, and Qwen Image 2.1 with the AnyAngle "
-                            "and Pruna 8-step LoRAs cleans that render up in the Start Image's style, keeping its setting and "
-                            "objects. Each view is measured afterwards and re-aimed once if it misses. It needs an H3 Ref2VA "
-                            "model and one Start Image; otherwise Apply uses text guidance and says why. Views take about ten "
-                            "seconds each plus a model switch, are cached for the same image, path and seed, and appear in "
-                            "the gallery.")
+                            "the subject's back or linger at a hold. **Apply** can show H3 the camera path instead:\n\n"
+                            "- **Camera preview video** (recommended): Depth Anything 3 re-renders the Start Image along "
+                            "the whole path, and the result, blurred and grey, is attached as `<Video 1>`, a Reference Video H3 takes "
+                            "only the camera movement from. H3 still animates the subject, so they turn in three dimensions "
+                            "as the camera moves. Rendering takes one to two minutes plus one background image; the render "
+                            "itself takes longer because H3 also reads the video. Single takes up to 15 seconds.\n"
+                            "- **Exact-pose view anchors:** stills of every keyframe view and of pacing checkpoints, "
+                            "rendered at their exact angles and injected at their times. They pin the subject's pose at "
+                            "those frames, so a small subject can look flat as the camera turns around it.\n"
+                            "- **Text only:** the written camera plan alone.\n\n"
+                            "Both picture modes need an H3 Ref2VA model and one Start Image; otherwise Apply uses text "
+                            "guidance and says why. Generated media are cached for the same image, path and seed.")
                 with gr.Row():
-                    anchor_views = gr.Checkbox(label="Anchor keyframe views with generated images", value=views_ready,
-                                               interactive=views_ready)
-                    view_seed = gr.Number(label="View image seed", value=42, precision=0, minimum=0)
+                    guidance = gr.Radio(choices=list(GUIDANCE_CHOICES), value="video" if views_ready else "text",
+                                        label="Camera guidance", interactive=views_ready)
+                    view_seed = gr.Number(label="Seed for generated images", value=42, precision=0, minimum=0)
                 views = gr.Gallery(label="Generated views", columns=4, height=260, interactive=False)
                 if not views_ready:
                     gr.Markdown("This WanGP build lacks the plugin generation API, timed-image labels or Depth Anything 3. "
-                                "Update WanGP to generate view anchors.")
+                                "Update WanGP to use the camera preview video or view anchors.")
             with gr.Accordion("Automatic hold timing", open=True):
                 gr.Markdown("H3 often arrives at a hold early or leaves it late. When a render of a camera plan with one hold "
                             "appears in the output folder, this measures the still interval from background motion, retimes "
@@ -271,7 +290,7 @@ class H3CameraPlugin(WAN2GPPlugin):
             if self._wangp_session is not None:
                 try:
                     with self._wangp_session.plugin_ui_context():
-                        apply.click(self.apply_camera, inputs=[anchor_views, view_seed, *args],
+                        apply.click(self.apply_camera, inputs=[guidance, view_seed, *args],
                                     outputs=[*[components[name] for name in FORM_OUTPUTS], table, compiled, status,
                                              *[components[name] for name in ANCHOR_OUTPUTS], views, applied],
                                     api_name="h3_camera_apply")
@@ -283,7 +302,7 @@ class H3CameraPlugin(WAN2GPPlugin):
                 applied.change(**label_refresh).then(**length_refresh).then(
                     fn=None, inputs=None, outputs=None, js=self.PROMPT_TOOLS_ATTACH_JS, api_name=False)
             else:
-                anchor_views.interactive = False
+                guidance.interactive = False
                 apply.click(self.apply_plan, inputs=args, outputs=[*[components[name] for name in FORM_OUTPUTS],
                             table, compiled, status], api_name="h3_camera_apply").success(**label_refresh).success(
                     **length_refresh).then(fn=None, inputs=None, outputs=None, js=self.PROMPT_TOOLS_ATTACH_JS, api_name=False)
@@ -532,7 +551,8 @@ class H3CameraPlugin(WAN2GPPlugin):
         result = self._compile(*[values[name] for name in ANCHOR_INPUTS])
         result["summary"] += description + " Existing images are retained with their native Picture labels updated."
         return (*self._apply_result(result), gr.update(value=refs), gr.update(value=native_positions, visible=True),
-                gr.update(value=values["video_prompt_type"]), gr.update(value="FI"), gr.update(visible=True))
+                gr.update(value=values["video_prompt_type"]), gr.update(value="FI"), gr.update(visible=True),
+                *self._video_updates(values))
 
     def apply_hold_image(self, image, hold_keyframe, *args):
         values, initial = self._anchor_form(args)
@@ -603,35 +623,156 @@ class H3CameraPlugin(WAN2GPPlugin):
         return tuple(value if isinstance(value, dict) and value.get("__type__") == "update" else gr.update(value=value)
                      for value in values)
 
-    def _views_unavailable(self, use_views, args):
-        """Why view anchors cannot be added to this form, or None."""
-        if not use_views:
-            return "view anchors are turned off."
+    def _guidance_unavailable(self, mode, args):
+        """Why the chosen camera guidance cannot be added to this form, or None."""
+        if mode == "text":
+            return "camera guidance is set to text only."
         if self._wangp_session is None or window_contexts is None or not DEPTH_READY:
             return "this WanGP build lacks the plugin generation API, timed-image labels or Depth Anything 3."
         try:
             values, initial = self._anchor_form(args)
         except gr.Error as error:
             return str(error.message if hasattr(error, "message") else error)
+        start = view_anchors.pose_of(initial["path"][0])
+        if all(view_anchors.pose_of(keyframe) == start for keyframe in initial["path"]):
+            return "the path never leaves the start view, which the Start Image already shows."
+        if mode == "video":
+            definition = self.get_model_def(self.get_state_model_type(values["state"])) or {}
+            guide = self._video_path(values["video_guide"])
+            if not definition.get("reference_video_enabled"):
+                return "this model takes no Reference Video; choose view anchors instead."
+            if guide and not self._is_preview(guide):
+                return "a Reference / Control Video is already attached; remove it or choose view anchors."
+            if initial["frame_count"] > PREVIEW_MAX_FRAMES:
+                return "H3 reads at most 15 seconds of a Reference Video; choose view anchors for longer takes."
+            return None
         targets, _ = view_anchors.anchor_targets(initial["path"], initial["frame_count"], keyframe_frame,
                                                  initial["fps"], values["interpolation"])
         if not targets:
             return "the path never leaves the start view, which the Start Image already shows."
         return None
 
-    def apply_camera(self, use_views, seed, *args):
-        """Apply the camera path, first anchoring generated keyframe views when this form allows it."""
+    def apply_camera(self, mode, seed, *args):
+        """Apply the camera path with the chosen camera guidance: a camera preview video, view anchors or text.
+        ``mode`` is "video", "views" or "text"; True and False mean views and text, as before."""
         # WanGP pumps the queue only for handlers whose own code uses the plugin session.
         session = self._wangp_session
-        anchors = len(ANCHOR_OUTPUTS)
+        mode = {True: "views", False: "text"}.get(mode, mode)
         text_only = list(self.apply_plan(*args))  # Validates the plan; invalid input raises before any change.
-        reason = self._views_unavailable(use_views, args)
+        reason = self._guidance_unavailable(mode, args)
         if reason:
             text_only[-1] += f" Text guidance only: {reason}"
-            yield self._as_updates((*text_only, *[gr.update()] * anchors, gr.update(), str(time.time_ns())))
+            yield self._as_updates((*text_only, *self._text_media_updates(args), gr.update(), str(time.time_ns())))
             return
-        for final, updates in self._view_anchor_steps(session, seed, args):
+        if mode == "video":
+            steps = self._camera_video_steps(session, seed, args)
+        else:
+            steps = self._view_anchor_steps(session, seed, args)
+        for final, updates in steps:
             yield (*updates, gr.update(value=str(time.time_ns())) if final else gr.update())
+
+    @staticmethod
+    def _video_path(item):
+        if isinstance(item, dict):
+            item = item.get("path") or (item.get("video") or {}).get("path")
+        return str(item) if isinstance(item, (str, Path)) and str(item) else None
+
+    @staticmethod
+    def _is_preview(path):
+        return bool(path) and Path(path).name.startswith(PREVIEW_PREFIX)
+
+    def _without_generated_video(self, values):
+        """Detach a camera preview video an earlier Apply attached, so another guidance mode never keeps it."""
+        if not self._is_preview(self._video_path(values.get("video_guide"))):
+            return values
+        flags = "".join(flag for flag in values["video_prompt_type"] or "" if flag not in VIDEO_GUIDE_LETTERS)
+        return dict(values, video_guide=None, video_prompt_type=flags, video_cleared=True)
+
+    @staticmethod
+    def _video_updates(values):
+        """Updates for the video_guide outputs: cleared when a preview video was detached, unchanged otherwise."""
+        if values.get("video_cleared"):
+            return gr.update(value=None), gr.update(value="")
+        return gr.update(), gr.update()
+
+    def _text_media_updates(self, args):
+        """ANCHOR_OUTPUTS updates for a text-only Apply: detach a camera preview video, leave everything else."""
+        values = self._without_generated_video(dict(zip(ANCHOR_INPUTS, args)))
+        if not values.get("video_cleared"):
+            return (gr.update(),) * len(ANCHOR_OUTPUTS)
+        return (gr.update(), gr.update(), gr.update(value=values["video_prompt_type"]), gr.update(), gr.update(),
+                *self._video_updates(values))
+
+    def _relay(self, steps):
+        """Forward a _ViewRun step's progress text as status updates and return its result."""
+        count = len(FORM_OUTPUTS) + 3 + len(ANCHOR_OUTPUTS) + 1
+        while True:
+            try:
+                message = next(steps)
+            except StopIteration as stop:
+                return stop.value
+            updates = [gr.update()] * count
+            updates[len(FORM_OUTPUTS) + 2] = gr.update(value=message)
+            yield False, tuple(updates)
+
+    def _camera_video_steps(self, session, seed, args):
+        """Yield (final, updates): progress messages, then the form with the camera preview video attached."""
+        values, initial = self._anchor_form(args)
+        try:
+            seed = int(seed)
+            if seed < 0:
+                raise ValueError("Use a seed of 0 or more.")
+            values = self._without_generated_views(self._without_generated_video(values), initial)
+            positions = self._injection_positions(values, initial)
+        except (ValueError, TypeError, OverflowError) as error:
+            raise gr.Error(str(error)) from error
+        frames, fps = initial["frame_count"], initial["fps"]
+        image_path, size = self._image_file(initial["image_start"][0])
+        resolution = view_anchors.view_resolution(*size)
+        width, height = map(int, resolution.split("x"))
+        preview_size = (max(16, round(width * PREVIEW_SCALE / 2) * 2), max(16, round(height * PREVIEW_SCALE / 2) * 2))
+        image_hash = hashlib.sha1(Path(image_path).read_bytes()).hexdigest()
+        plan = json.dumps(initial["path"], sort_keys=True)
+        cache = self.__dict__.setdefault("_view_cache", {})
+        key = ("preview", image_hash, resolution, seed, plan, frames, values["interpolation"])
+        video = cache.get(key)
+        if not (video and Path(video).is_file()):
+            name = hashlib.sha1(repr(key).encode()).hexdigest()[:12]
+            folder = Path(getattr(self, "save_path", None) or tempfile.gettempdir())
+            run = self._view_run(session, values["state"], image_path, resolution, seed)
+            try:
+                yield from self._relay(run.start(1, cache, (image_hash, resolution, seed), "the camera preview video"))
+                poses = view_anchors.frame_poses(initial["path"], frames, keyframe_frame, values["interpolation"])
+                video = yield from self._relay(self._render_preview(run.scene, poses, preview_size, fps,
+                                                                   folder / f"{PREVIEW_PREFIX}{name}_s{seed}.mp4"))
+            finally:
+                run.close()
+            cache[key] = video
+        flags = "".join(flag for flag in values["video_prompt_type"] or "" if flag not in VIDEO_GUIDE_LETTERS)
+        flags = (flags if positions else flags.replace("F", "")) + PREVIEW_VIDEO_MODE
+        result = self._compile(*[values[name] for name in ANCHOR_INPUTS])
+        result["prompt"] = add_camera_video(result["prompt"])
+        result["summary"] += (f" Camera preview video: {frames} frames along the path, attached as <Video 1>, seed {seed}. "
+                              "H3 takes its camera movement and animates the subject itself.")
+        updates = (*self._apply_result(result), gr.update(value=values["image_refs"]),
+                   gr.update(value=values["frames_positions"]), gr.update(value=flags), gr.update(), gr.update(),
+                   gr.update(value=video, visible=True), gr.update(value=PREVIEW_VIDEO_MODE))
+        yield True, self._as_updates((*updates, []))
+
+    @staticmethod
+    def _render_preview(scene, poses, size, fps, target):
+        """Render, soften and encode the camera preview video; yields progress text and returns its path."""
+        import cv2
+        rendered = []
+        for index, frame in enumerate(scene.flythrough(poses, size), 1):
+            if PREVIEW_BLUR:
+                frame = cv2.GaussianBlur(frame, (0, 0), PREVIEW_BLUR)
+            if PREVIEW_GREY:
+                frame = cv2.cvtColor(cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY), cv2.COLOR_GRAY2RGB)
+            rendered.append(frame)
+            if index % 24 == 0 or index == len(poses):
+                yield f"Rendering the camera preview video: frame {index} of {len(poses)}..."
+        return camera_timing.write_video(rendered, fps, size, target)
 
     @staticmethod
     def _item_path(item):
@@ -664,26 +805,13 @@ class H3CameraPlugin(WAN2GPPlugin):
 
     def _view_anchor_steps(self, session, seed, args):
         """Yield (final, updates): progress messages, then the anchored and applied form."""
-        count = len(FORM_OUTPUTS) + 3 + len(ANCHOR_OUTPUTS) + 1
-        status_index = len(FORM_OUTPUTS) + 2
-
-        def relay(steps):
-            """Forward a _ViewRun step's progress text as status updates and return its result."""
-            while True:
-                try:
-                    message = next(steps)
-                except StopIteration as stop:
-                    return stop.value
-                updates = [gr.update()] * count
-                updates[status_index] = gr.update(value=message)
-                yield False, tuple(updates)
-
+        relay = self._relay
         values, initial = self._anchor_form(args)
         try:
             seed = int(seed)
             if seed < 0:
                 raise ValueError("Use a view image seed of 0 or more.")
-            values = self._without_generated_views(values, initial)
+            values = self._without_generated_views(self._without_generated_video(values), initial)
             positions = self._injection_positions(values, initial)
         except (ValueError, TypeError, OverflowError) as error:
             raise gr.Error(str(error)) from error
@@ -747,7 +875,7 @@ class H3CameraPlugin(WAN2GPPlugin):
             result = self._compile(*[values[name] for name in ANCHOR_INPUTS])
             result["summary"] += description
             anchors = (gr.update(value=values["image_refs"]), gr.update(value=values["frames_positions"]),
-                       gr.update(value=values["video_prompt_type"]), gr.update(), gr.update())
+                       gr.update(value=values["video_prompt_type"]), gr.update(), gr.update(), *self._video_updates(values))
             yield True, self._as_updates((*self._apply_result(result), *anchors, gallery))
             return
         updates = self._apply_image_updates(values, initial, positions, additions, description)
@@ -930,16 +1058,17 @@ class _ViewRun:
                 yield "Waiting for the current generation to finish before estimating depth..."
             time.sleep(0.5)
 
-    def start(self, count, cache, key):
+    def start(self, count, cache, key, what=None):
         """Find the subject, paint it out for a background plate, and register the Start Image."""
         self.cache = cache
+        what = what or f"{count} exact-pose view(s)"
         yield from self._wait_idle()
-        yield f"Preparing {count} exact-pose view(s): finding the subject in the Start Image..."
+        yield f"Preparing {what}: finding the subject in the Start Image..."
         with Image.open(self.image_path) as start:
             start = start.convert("RGB").resize(self.size)
         mask = view_geometry.subject_mask(start)
         plate, grown = yield from self._plate(self.image_path, start, mask, "the Start Image")
-        yield f"Preparing {count} exact-pose view(s): estimating depth..."
+        yield f"Preparing {what}: estimating depth..."
         self.scene = view_geometry.Scene(self.model, start, mask, plate, grown)
         self.files = [self.image_path]
 

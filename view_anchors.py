@@ -114,6 +114,21 @@ def anchor_targets(path, frames, keyframe_frame, fps, interpolation="smooth"):
     return targets, skipped
 
 
+def frame_poses(path, frames, keyframe_frame, interpolation="smooth"):
+    """Planned camera pose (azimuth, elevation, distance) at every frame, eased between keyframes like the
+    pacing checkpoints, for the camera preview video."""
+    keys = [(keyframe_frame(keyframe, frames), pose_of(keyframe)) for keyframe in path]
+    poses = []
+    for frame in range(frames):
+        pose = keys[-1][1] if frame >= keys[-1][0] else keys[0][1]
+        for (first, a), (last, b) in zip(keys, keys[1:]):
+            if first <= frame <= last:
+                pose = a if last == first else _blend(a, b, _ease((frame - first) / (last - first), interpolation))
+                break
+        poses.append(pose)
+    return poses
+
+
 def helper_pose(previous, target):
     """Pose MAX_STEP along the path from the ``previous`` planned pose toward ``target``, or None when the target
     is within reach. Azimuths are the plan's unwrapped values, so helpers turn the way the path turns."""

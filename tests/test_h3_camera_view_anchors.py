@@ -63,6 +63,38 @@ class ViewTargetTests(unittest.TestCase):
         small, _ = targets_of([pose(0, 0), pose(1, 8)])
         self.assertEqual([t["kind"] for t in small], ["keyframe"])
 
+    def test_frame_poses_ease_between_keyframes_and_hold_still(self):
+        poses = views.frame_poses(REPORTED, 243, plan.keyframe_frame)
+        self.assertEqual(len(poses), 243)
+        self.assertEqual(poses[0], (0.0, 0.0, 1.0))
+        self.assertEqual(poses[121], (45.0, 48.0, .75))
+        self.assertEqual(poses[133], (45.0, 48.0, .75))
+        self.assertTrue(all(pose == (45.0, 48.0, .75) for pose in poses[121:134]))
+        self.assertEqual(poses[242], (90.0, 0.0, .5))
+        self.assertEqual(poses[60], views._blend((0, 0, 1), (45, 48, .75), views._ease(60 / 121, "smooth")))
+        azimuths = [pose[0] for pose in poses]
+        self.assertEqual(azimuths, sorted(azimuths))
+
+    def test_camera_preview_lines_go_where_h3_reads_references_and_actions(self):
+        prompt = ("subject_definitions: <Subject 1> is the woman in <Picture 2>.\n"
+                  "retention_analysis: <Subject 1>: fully_preserved - her identity.\n"
+                  "detailed_description: [Shot 1] <Subject 1> sits on a crate.\n"
+                  "overall_soundscape: Rain.")
+        added = plan.add_camera_video(prompt)
+        lines = added.split("\n")
+        self.assertEqual(lines[2], plan.CAMERA_VIDEO_REFERENCE)
+        self.assertEqual(lines[3], "detailed_description: [Shot 1] The camera moves exactly as in <Video 1>. "
+                                   "<Subject 1> sits on a crate.")
+        self.assertEqual(plan.add_camera_video(added), added)
+        self.assertEqual(plan.strip_camera_video(added), prompt)
+        self.assertEqual(plan.strip_camera_plan(added), prompt)
+        no_retention = plan.add_camera_video("detailed_description: A boat.")
+        self.assertEqual(no_retention.split("\n")[0], "retention_analysis: " + plan.CAMERA_VIDEO_REFERENCE)
+        free = plan.add_camera_video("A boat drifts on a lake.")
+        self.assertTrue(free.startswith(plan.CAMERA_VIDEO_ACTION))
+        self.assertIn(plan.CAMERA_VIDEO_REFERENCE, free)
+        self.assertEqual(plan.strip_camera_video(free).strip(), "A boat drifts on a lake.")
+
     def test_a_return_to_the_start_view_is_left_to_the_start_image(self):
         targets, skipped = targets_of([pose(0, 0), pose(.4, 30), pose(.5, 30), pose(.6, 0), pose(1, 0)])
         self.assertEqual([(t["pose"], t["kind"]) for t in targets], [((15.0, 0.0, 1.0), "checkpoint"), ((30.0, 0.0, 1.0), "keyframe")])
@@ -161,6 +193,14 @@ class FakeScene:
     def drop_last(self):
         self.measured.pop()
         self.images.pop()
+
+    def flythrough(self, poses, size):
+        import numpy as np
+        self.flown = list(poses)
+        for _ in self.flown:
+            frame = np.zeros((size[1], size[0], 3), np.uint8)
+            frame[..., 0] = 200  # a red frame, so the tests can see the preview turn grey
+            yield frame
 
 
 class FakeResult:
@@ -402,9 +442,93 @@ class ApplyWithViewAnchorsTests(unittest.TestCase):
         self.assertIn("A woman from <Picture 7> sits on a crate.", final["prompt"]["value"])
         self.assertEqual(final["prompt"]["value"].count("Camera plan:"), 1)
 
+    def preview_ready(self):
+        """Let the fake host take a Reference Video and record the encoded preview videos."""
+        base = self.plugin.get_model_def
+        self.plugin.get_model_def = lambda model: dict(base(model), reference_video_enabled=True)
+        self.plugin.save_path = self.folder.name
+        self.written = []
+
+        def write(frames, fps, size, target):
+            frames = list(frames)
+            self.written.append((len(frames), fps, size, Path(target).name))
+            self.grey = all((frame[..., 0] == frame[..., 1]).all() and (frame[..., 1] == frame[..., 2]).all()
+                            for frame in frames)
+            Path(target).write_bytes(b"mp4")
+            return str(target)
+
+        patcher = patch.object(camera.camera_timing, "write_video", side_effect=write)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.plugin._wangp_session = FakeSession(self.folder.name)
+        return self.plugin._wangp_session
+
+    def test_apply_attaches_a_camera_preview_video_and_lets_h3_animate_the_subject(self):
+        # Test 1: view anchors pinned the subject in profile while the camera turned around her; a preview video
+        # of the camera path, attached as a Reference Video, gave the move within 4 degrees and a subject that turns.
+        session = self.preview_ready()
+        args = self.args()
+        final = self.apply(args, "video")[-1]
+        (frames, fps, size, name), = self.written
+        self.assertEqual((frames, fps, size), (243, 24.0, (352, 640)))
+        self.assertTrue(self.grey, "a coloured preview lends H3 its smeared textures")
+        self.assertTrue(name.startswith(camera.PREVIEW_PREFIX) and name.endswith("_s42.mp4"))
+        self.assertEqual(Path(final["video_guide"]["value"]).name, name)
+        self.assertEqual(final["video_prompt_type_video_guide"]["value"], "V-U")
+        self.assertEqual(final["video_prompt_type"]["value"], "IV-U")
+        self.assertEqual(final["frames_positions"]["value"], "")
+        self.assertEqual(final["image_refs"]["value"], [self.ref])
+        prompt = final["prompt"]["value"]
+        self.assertEqual(prompt.count(plan.CAMERA_VIDEO_REFERENCE), 1)
+        self.assertEqual(prompt.count("The camera moves exactly as in <Video 1>."), 1)
+        self.assertIn("Camera plan:", prompt)
+        self.assertIn("Camera preview video: 243 frames along the path, attached as <Video 1>, seed 42.",
+                      final["summary"]["value"])
+        flown = self.scenes[0].flown
+        self.assertEqual((flown[0], flown[121], flown[242]), ((0.0, 0.0, 1.0), (45.0, 48.0, .75), (90.0, 0.0, .5)))
+        self.assertEqual(session.submissions, [])  # no subject mask here, so no background plate to paint
+        # Re-applying the same plan reuses the preview and adds its prompt lines once.
+        again = self.apply(self.follow(args, final), "video")[-1]
+        self.assertEqual(len(self.written), 1)
+        self.assertEqual(again["video_guide"]["value"], final["video_guide"]["value"])
+        self.assertEqual(again["prompt"]["value"].count(plan.CAMERA_VIDEO_REFERENCE), 1)
+
+    def test_switching_away_from_the_preview_video_detaches_it(self):
+        self.preview_ready()
+        args = self.args()
+        video = self.apply(args, "video")[-1]
+        anchored = self.apply(self.follow(args, video), "views")[-1]
+        self.assertIsNone(anchored["video_guide"]["value"])
+        self.assertEqual(anchored["video_prompt_type_video_guide"]["value"], "")
+        self.assertEqual(anchored["video_prompt_type"]["value"], "FI")
+        self.assertNotIn("<Video 1>", anchored["prompt"]["value"])
+        self.assertEqual(anchored["frames_positions"]["value"], "61 122 134 189 243")
+        text, = self.apply(self.follow(args, video), "text")
+        self.assertIsNone(text["video_guide"]["value"])
+        self.assertEqual(text["video_prompt_type"]["value"], "I")
+        self.assertNotIn("<Video 1>", text["prompt"]["value"])
+        self.assertIn("Text guidance only: camera guidance is set to text only.", text["summary"]["value"])
+
+    def test_the_preview_video_says_why_it_cannot_be_used(self):
+        self.preview_ready()
+        own = str(Path(self.folder.name) / "my_reference.mp4")
+        cases = ((self.args(video_guide=own, video_prompt_type="IV-U"), "a Reference / Control Video is already attached"),
+                 (self.args(video_length=400), "H3 reads at most 15 seconds of a Reference Video"))
+        for args, reason in cases:
+            with self.subTest(reason=reason):
+                step, = self.apply(args, "video")
+                self.assertIn("Text guidance only: " + reason, step["summary"]["value"])
+                self.assertNotIn("value", step["video_guide"])
+        self.plugin.get_model_def = lambda model: {"frames_minimum": 107, "frames_steps": 17, "frames_offset": 5,
+                                                   "image_prompt_types_allowed": "TSEVL", "reference_image_enabled": True,
+                                                   "custom_frames_injection": True}
+        step, = self.apply(self.args(), "video")
+        self.assertIn("this model takes no Reference Video; choose view anchors instead.", step["summary"]["value"])
+        self.assertEqual(self.written, [])
+
     def test_text_guidance_with_a_reason_when_views_are_off_or_unavailable(self):
         self.plugin._wangp_session = session = FakeSession(self.folder.name)
-        cases = ((False, self.args(), "view anchors are turned off."),
+        cases = ((False, self.args(), "camera guidance is set to text only."),
                  (True, self.args(image_start=None), "Start Image"),
                  (True, self.args(path=[pose(0, 0), pose(1, 0)]), "never leaves the start view"))
         for use_views, args, reason in cases:

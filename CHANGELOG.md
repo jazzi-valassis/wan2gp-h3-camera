@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 - 2026-10-26
+
+- **Camera preview video (new default camera guidance).** Apply re-renders the Start Image with Depth Anything 3 from the camera of every frame along the path, on a background plate with the subject painted out, turns it grey and blurs it, and attaches it as `<Video 1>` in Reference Video (H3 Ref2VA `V-U`). The prompt tells H3 to take only its camera movement, so the camera follows the whole path while H3 animates the subject in three dimensions. No poses are injected, so the editing model cannot add props at fixed frames.
+- On test 1 (two seeds), the camera stayed within 3 degrees of the planned angle and 8 degrees of the planned height at every measured frame, the hold landed on the planned frames (119-136 and 122-144 for 121-133, where 0.6.3 arrived at frame 102), and the render showed no glowing plank or braid streak. Renders take about twice as long.
+- **Camera guidance** chooses between the camera preview video, the exact-pose view anchors of 0.6.x, and text only. Switching modes detaches the other mode's media; the generated-media seed applies to both.
+- Limits: the preview needs a free Reference Video slot, a Ref2VA model that accepts one, and a take of at most 15 seconds (362 frames); otherwise Apply says why and applies text guidance. Use view anchors for longer takes.
+- Five new regressions (per-frame poses with holds, prompt placement of the preview lines, attaching, detaching, and the fallback reasons). 173 tests pass.
+
 ## 0.6.3 - 2026-10-17
 
 - **The background plate keeps what the subject sits or stands on.** It used to paint the support out with the subject; seen from above, the bare floor left where test 1's crate stood came back as a flat ghost lid beside her. The plate now keeps the support (the prompt says so), the plate's depth identifies it (the part of the subject's area that the plate shows at the subject's depth), and the plate layer leaves it out, because the subject's card already draws it. Drawing it from both, or giving it its own depth or its own card, produced two crates, a row of crates, or the subject floating beside the crate.

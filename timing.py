@@ -34,6 +34,24 @@ def _tool(name):
     return executable
 
 
+def write_video(frames, fps, size, target):
+    """Encode RGB frames (uint8 arrays of ``size`` width x height) to an H.264 MP4 at ``fps``."""
+    width, height = size
+    command = [_tool('ffmpeg'), '-v', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{width}x{height}',
+               '-r', str(fps), '-i', '-', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', str(target)]
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    try:
+        for frame in frames:
+            process.stdin.write(frame.tobytes())
+        process.stdin.close()
+    except BrokenPipeError:
+        pass
+    if process.wait() != 0:
+        raise ValueError(f'FFmpeg could not write {target}: {process.stderr.read().decode(errors="replace").strip()}')
+    return str(target)
+
+
 def _integer(value, label):
     if isinstance(value, bool):
         raise ValueError(f'{label} must be a whole frame number.')

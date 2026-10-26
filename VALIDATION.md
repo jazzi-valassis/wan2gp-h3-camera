@@ -1,5 +1,22 @@
 # H3 Camera validation
 
+## Local 0.7.0 camera preview video - 2026-10-26
+
+Same test-1 setup, path (`path2.json`), preset and seeds as the 0.6.3 section below. Apply ran through the plugin's real `_view_anchor_steps` (`run060.py`, tag `PVg`): plate edit 1.4 s, depth and 243 preview frames in 103 s. The preview is grey and blurred; in colour (tags `RV`, `RVb`) the smeared roof came back as streaks in the render.
+
+Poses measured with `measure_pose.py` (degrees right, degrees up, distance):
+
+| Render | Seed | f60 | f121 hold | f145 hold | f189 | f242 end | Still frames (plan 121-133) | Time |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.7.0 preview | 764485034 | 23.2 26.3 0.88 | 45.8 54.7 0.77 | 45.9 54.2 0.76 | 47.2 30.0 0.64 | 45.3 0.5 0.53 | 122-144 | 785 s |
+| 0.6.3 anchors | 764485034 | 25.1 29.0 1.00 | 43.2 48.9 0.92 | 42.9 48.7 0.89 | 43.6 24.9 0.76 | 39.5 0.5 0.55 | 102-141 | 349 s |
+| 0.7.0 preview | 708144286 | 24.7 26.8 0.88 | 48.1 55.7 0.73 | 46.7 53.0 0.73 | 46.6 25.8 0.62 | 47.7 -0.1 0.52 | 119-136 | 722 s |
+| 0.6.3 anchors | 708144286 | 24.5 27.7 0.97 | 43.2 48.0 0.97 | 43.1 47.9 0.99 | 41.1 24.2 0.73 | 43.6 0.1 0.57 | 102-145 | 344 s |
+
+The plan is 45 degrees right, 48 up and 0.75x at the hold, and 45 right, 0 up and 0.5x at the end. The preview renders keep the planned distance (0.6.3 held at 0.89-0.99x) and arrive at the hold on time instead of 0.8 s early, so no retiming is needed; they rise about 7 degrees higher than planned at the hold. Both show one crate with the subject seated on it, no glowing plank and no braid on the floor; seed 708 adds a few small cans beside the crate in the descent. The 708 render was made on 2026-10-26 with the current host (WanGP 18.81 merge), the others on 2026-10-16/17.
+
+All 173 automated tests passed against the installed host. Evidence: `local_runtime/deepy_projects/h3_camera_test1_20261016/` (`run060_PVg.log`, `PVg.apply.json`, `h3cam_camera_6093462dc328_s42.mp4`, `final_PVg_vs_C14_s764.png`, `sheet_PVg_s708144286.png`, `measure_PVg_vs_C14_s*.txt`); renders `D:/outputs/h3cam_test1_PVg_s*.mp4`.
+
 ## Local 0.6.3 support kept in the plate, views kept in order - 2026-10-17
 
 Same test-1 setup, path, preset and seeds as the 0.6.2 section below.
